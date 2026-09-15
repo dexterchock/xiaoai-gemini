@@ -1,11 +1,11 @@
-# xiaoai-plus
+# xiaoai-gemini
 
-在小爱音箱上获得与 Gemini 实时语音对话体验
+在小爱音箱上获得基于 Google Gemini 的端侧实时语音对话体验。
 
+> 💡 **致谢与声明 (Credits)**  
+> 本项目基于 [kslr/xiaoai-plus](https://github.com/kslr/xiaoai-plus) 进行二次开发。核心变更为将原项目的 **豆包 (Doubao)** 模型切换为 **Google Gemini**，为小爱音箱提供高灵敏度、低延迟的 Gemini 实时语音交互体验。
 
-https://github.com/user-attachments/assets/18e65b6b-2a28-415f-be9a-9d7baf11f7cd
-
-
+---
 ## 支持设备
 
 | 型号 | 设备代号 |
@@ -81,5 +81,3 @@ https://github.com/user-attachments/assets/18e65b6b-2a28-415f-be9a-9d7baf11f7cd
 MIT
 
 ## 致谢
-
-本项目大量参考 https://github.com/idootop/open-xiaoai 研究和开发。
