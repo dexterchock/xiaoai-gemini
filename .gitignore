@@ -1,0 +1,64 @@
+# 构建产物
+build/
+build-*/
+dist/
+
+# 静态库构建产物（由 make build-sherpa-static 生成）
+assets/sherpa_onnx_static/
+assets/sherpa-onnx-src/
+assets/onnxruntime-*-build-*
+assets/onnxruntime-src/
+assets/onnxruntime-*-src/
+assets/sherpa_onnx/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+_deps/
+
+# 编译中间产物
+*.o
+*.a
+
+# 日志
+*.log
+
+# 本地敏感配置（请基于 config.ini.example 创建）
+config.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+.claude/
+
+# 系统文件
+.DS_Store
+
+# 通用编译中间产物
+*.d
+*.slo
+*.lo
+*.obj
+*.gch
+*.pch
+*.ilk
+*.pdb
+*.so
+*.dylib
+*.dll
+*.mod
+*.smod
+*.lai
+*.la
+*.lib
+*.exe
+*.out
+*.app
+*.dwo
+
+# 本地临时文档
+ai.md

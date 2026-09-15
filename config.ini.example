@@ -1,0 +1,13 @@
+[realtime]
+api_key = your_google_api_key
+model = gemini-3.1-flash-live-preview
+bot_name = Gemini
+system_role = 你是 Gemini 同学，是小爱音箱上的语音助手。
+speaking_style = 语气自然、友好、简洁。
+voice = Kore
+
+[wakeup]
+say_hello = 在
+
+[audio]
+playback_gain = 1.0

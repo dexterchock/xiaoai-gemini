@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - src/**
+      - toolchain/**
+      - CMakeLists.txt
+      - armv7-linux-gnueabihf.cmake
+      - install.sh
+      - boot.sh
+      - .github/workflows/release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-latest
+  cancel-in-progress: true
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache sherpa static build outputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            assets/sherpa-onnx-src
+            assets/sherpa_onnx_static
+          key: sherpa-static-${{ runner.os }}-${{ hashFiles('toolchain/build-sherpa-static.sh', 'toolchain/Dockerfile', 'CMakeLists.txt') }}
+
+      - name: Build cross toolchain image
+        run: make -C toolchain build
+
+      - name: Build sherpa-onnx static dependencies
+        run: make -C toolchain build-sherpa-static
+
+      - name: Cross compile armv7 release binary
+        run: make -C toolchain compile
+
+      - name: Package release archive
+        run: bash toolchain/package-release.sh
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-latest
+          path: |
+            dist/release/oh2p.tar.gz
+            dist/release/oh2p.tar.gz.sha256
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: latest
+          name: Latest
+          allowUpdates: true
+          removeArtifacts: true
+          replacesArtifacts: true
+          makeLatest: true
+          prerelease: false
+          artifacts: dist/release/oh2p.tar.gz,dist/release/oh2p.tar.gz.sha256
+
+      - name: Publish jsDelivr mirror branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          MIRROR_DIR="$(mktemp -d)"
+          trap 'rm -rf "${MIRROR_DIR}"' EXIT
+
+          cp dist/release/oh2p.tar.gz "${MIRROR_DIR}/oh2p.tar.gz"
+          cp dist/release/oh2p.tar.gz.sha256 "${MIRROR_DIR}/oh2p.tar.gz.sha256"
+
+          cd "${MIRROR_DIR}"
+          git init
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b cdn
+          git add oh2p.tar.gz oh2p.tar.gz.sha256
+          git commit -m "Update CDN assets from ${GITHUB_SHA}"
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force origin cdn

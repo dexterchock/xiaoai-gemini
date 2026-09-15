@@ -1,0 +1,715 @@
+#include "realtime/client.hpp"
+
+#include <algorithm>
+#include <cctype>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <random>
+#include <system_error>
+#include <thread>
+
+#include <nlohmann/json.hpp>
+#include "common/log.hpp"
+
+namespace xiaoai_plus::realtime {
+
+namespace {
+
+const auto kLog = xiaoai_plus::GetLogger("realtime");
+
+constexpr const char* kInputMimeType = "audio/pcm;rate=16000";
+constexpr int kTargetSampleRate = 16000;
+constexpr int kDefaultOutputSampleRate = 24000;
+
+std::string GenSessionId() {
+  const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+  return "sid-" + std::to_string(now);
+}
+
+std::string Base64Encode(const std::vector<uint8_t>& in) {
+  static const char kAlphabet[] =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::string out;
+  out.reserve(((in.size() + 2) / 3) * 4);
+  for (size_t i = 0; i < in.size(); i += 3) {
+    const uint32_t b0 = in[i];
+    const uint32_t b1 = (i + 1 < in.size()) ? in[i + 1] : 0;
+    const uint32_t b2 = (i + 2 < in.size()) ? in[i + 2] : 0;
+    const uint32_t triple = (b0 << 16) | (b1 << 8) | b2;
+    out.push_back(kAlphabet[(triple >> 18) & 0x3F]);
+    out.push_back(kAlphabet[(triple >> 12) & 0x3F]);
+    out.push_back((i + 1 < in.size()) ? kAlphabet[(triple >> 6) & 0x3F] : '=');
+    out.push_back((i + 2 < in.size()) ? kAlphabet[triple & 0x3F] : '=');
+  }
+  return out;
+}
+
+int DecodeBase64Char(char c) {
+  if (c >= 'A' && c <= 'Z') return c - 'A';
+  if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+  if (c >= '0' && c <= '9') return c - '0' + 52;
+  if (c == '+') return 62;
+  if (c == '/') return 63;
+  return -1;
+}
+
+std::vector<uint8_t> Base64Decode(const std::string& in) {
+  std::vector<uint8_t> out;
+  uint32_t acc = 0;
+  int bits = 0;
+  for (char c : in) {
+    if (c == '=') {
+      break;
+    }
+    const int v = DecodeBase64Char(c);
+    if (v < 0) {
+      continue;
+    }
+    acc = (acc << 6) | static_cast<uint32_t>(v);
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out.push_back(static_cast<uint8_t>((acc >> bits) & 0xFF));
+    }
+  }
+  return out;
+}
+
+int SampleRateFromMime(const std::string& mime) {
+  // e.g. "audio/pcm;rate=24000"
+  const std::string kRate = "rate=";
+  const auto pos = mime.find(kRate);
+  if (pos == std::string::npos) {
+    return kDefaultOutputSampleRate;
+  }
+  int rate = 0;
+  for (size_t i = pos + kRate.size(); i < mime.size() &&
+                                      std::isdigit(static_cast<unsigned char>(mime[i]));
+       ++i) {
+    rate = rate * 10 + (mime[i] - '0');
+  }
+  return rate > 0 ? rate : kDefaultOutputSampleRate;
+}
+
+// Convert PCM s16le input to 16kHz mono using linear interpolation.
+std::vector<uint8_t> ResampleTo16k(const std::vector<uint8_t>& pcm, int rate_hz) {
+  if (pcm.empty() || pcm.size() % 2 != 0) {
+    return {};
+  }
+  if (rate_hz <= 0) {
+    rate_hz = kDefaultOutputSampleRate;
+  }
+  const size_t n_in = pcm.size() / 2;
+  if (n_in == 0) {
+    return {};
+  }
+  if (rate_hz == kTargetSampleRate) {
+    return pcm;
+  }
+  const double ratio = static_cast<double>(kTargetSampleRate) / static_cast<double>(rate_hz);
+  const size_t n_out = static_cast<size_t>(static_cast<double>(n_in) * ratio);
+  if (n_out == 0) {
+    return {};
+  }
+  std::vector<uint8_t> out(n_out * 2);
+  const auto* in = reinterpret_cast<const int16_t*>(pcm.data());
+  auto* dst = reinterpret_cast<int16_t*>(out.data());
+  for (size_t i = 0; i < n_out; ++i) {
+    const double pos = static_cast<double>(i) / ratio;
+    size_t i0 = static_cast<size_t>(pos);
+    size_t i1 = i0 + 1;
+    if (i1 >= n_in) {
+      i1 = n_in - 1;
+    }
+    const double frac = pos - static_cast<double>(i0);
+    const double s = static_cast<double>(in[i0]) * (1.0 - frac) +
+                     static_cast<double>(in[i1]) * frac;
+    const int32_t v = static_cast<int32_t>(std::lround(s));
+    dst[i] = static_cast<int16_t>(std::max(-32768, std::min(32767, v)));
+  }
+  return out;
+}
+
+std::string JsonString(const nlohmann::json& j, const char* key) {
+  if (!j.is_object()) {
+    return std::string();
+  }
+  auto it = j.find(key);
+  if (it == j.end() || !it->is_string()) {
+    return std::string();
+  }
+  return it->get<std::string>();
+}
+
+}  // namespace
+
+Client::Client(config::Config cfg, Callbacks callbacks)
+    : cfg_(std::move(cfg)), callbacks_(std::move(callbacks)), rng_(std::random_device{}()) {}
+
+Client::~Client() { Stop(); }
+
+bool Client::Start() {
+  bool expected = false;
+  if (!running_.compare_exchange_strong(expected, true)) {
+    return true;
+  }
+
+  sender_thread_ = std::thread([this]() {
+    while (running_.load()) {
+      std::vector<uint8_t> chunk;
+      {
+        std::unique_lock<std::mutex> lock(audio_mu_);
+        audio_cv_.wait(lock, [this]() { return !running_.load() || !audio_queue_.empty(); });
+        if (!running_.load()) {
+          break;
+        }
+        chunk = std::move(audio_queue_.front());
+        audio_queue_.pop_front();
+      }
+
+      bool connected = false;
+      {
+        std::lock_guard<std::mutex> lock(conn_mu_);
+        connected = ws_ && ws_connected_ && !session_id_.empty();
+      }
+      if (!connected) {
+        continue;
+      }
+
+      try {
+        SendRealtimeAudio(chunk);
+      } catch (...) {
+        kLog->warn("audio send failed");
+      }
+    }
+  });
+
+  return true;
+}
+
+void Client::Stop() {
+  if (!running_.exchange(false)) {
+    return;
+  }
+
+  audio_cv_.notify_all();
+  setup_cv_.notify_all();
+
+  CloseConnection(true);
+  if (sender_thread_.joinable()) {
+    sender_thread_.join();
+  }
+}
+
+bool Client::StartSession(std::chrono::milliseconds timeout) {
+  {
+    std::lock_guard<std::mutex> lock(conn_mu_);
+    if (!session_id_.empty()) {
+      return true;
+    }
+  }
+
+  if (!running_.load()) {
+    return false;
+  }
+
+  if (!EnsureConnection(timeout)) {
+    kLog->error("start session failed: ensure connection failed");
+    return false;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(conn_mu_);
+    session_id_ = GenSessionId();
+  }
+  kLog->info("gemini live session ready");
+  return true;
+}
+
+bool Client::FinishSession(std::chrono::milliseconds) {
+  std::string sid;
+  {
+    std::lock_guard<std::mutex> lock(conn_mu_);
+    sid = session_id_;
+  }
+  if (sid.empty()) {
+    return true;
+  }
+  CloseConnection(false);
+  return true;
+}
+
+bool Client::EnqueueAudio(const std::vector<uint8_t>& chunk) {
+  if (chunk.empty()) {
+    return true;
+  }
+  std::lock_guard<std::mutex> lock(audio_mu_);
+  if (static_cast<int>(audio_queue_.size()) >= cfg_.budget.input_queue_frames) {
+    return false;
+  }
+  audio_queue_.emplace_back(chunk);
+  audio_cv_.notify_one();
+  return true;
+}
+
+bool Client::EnqueueAudio(std::vector<uint8_t>&& chunk) {
+  if (chunk.empty()) {
+    return true;
+  }
+  std::lock_guard<std::mutex> lock(audio_mu_);
+  if (static_cast<int>(audio_queue_.size()) >= cfg_.budget.input_queue_frames) {
+    return false;
+  }
+  audio_queue_.push_back(std::move(chunk));
+  audio_cv_.notify_one();
+  return true;
+}
+
+bool Client::SendSayHello() {
+  std::string sid;
+  {
+    std::lock_guard<std::mutex> lock(conn_mu_);
+    sid = session_id_;
+  }
+  if (sid.empty()) {
+    return true;
+  }
+  if (cfg_.wakeup.say_hello.empty()) {
+    return true;
+  }
+  return SendJson({{"realtimeInput", {{"text", cfg_.wakeup.say_hello}}}});
+}
+
+bool Client::EnsureConnection(std::chrono::milliseconds timeout) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  int attempt = 0;
+
+  while (running_.load()) {
+    {
+      std::lock_guard<std::mutex> lock(conn_mu_);
+      if (ws_ && ws_connected_) {
+        return true;
+      }
+    }
+
+    CloseConnection(false);
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline) {
+      return false;
+    }
+
+    if (OpenConnection(std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now))) {
+      return true;
+    }
+
+    ++attempt;
+    const auto current = std::chrono::steady_clock::now();
+    if (current >= deadline) {
+      return false;
+    }
+
+    auto backoff = NextBackoff(attempt);
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - current);
+    if (backoff > remaining) {
+      backoff = remaining;
+    }
+    if (backoff.count() > 0) {
+      kLog->warn("connection attempt {} failed, retrying in {}ms", attempt, backoff.count());
+      std::this_thread::sleep_for(backoff);
+    }
+  }
+  return false;
+}
+
+bool Client::OpenConnection(std::chrono::milliseconds timeout) {
+  std::string ws_url = cfg_.realtime.preset.ws_url;
+  const char sep = (ws_url.find('?') != std::string::npos) ? '&' : '?';
+  ws_url += sep;
+  ws_url += "key=";
+  ws_url += cfg_.realtime.api_key;
+
+  // Log without the credentials in the query string.
+  const auto query_pos = cfg_.realtime.preset.ws_url.find('?');
+  const std::string log_url =
+      query_pos == std::string::npos ? cfg_.realtime.preset.ws_url
+                                     : cfg_.realtime.preset.ws_url.substr(0, query_pos);
+  kLog->info("connecting to {}", log_url);
+
+  auto ws = std::make_unique<ix::WebSocket>();
+  ws->setUrl(ws_url);
+  ws->disableAutomaticReconnection();
+
+  ws->setOnMessageCallback([this](const ix::WebSocketMessagePtr& msg) {
+    if (msg->type == ix::WebSocketMessageType::Open) {
+      std::lock_guard<std::mutex> lock(conn_mu_);
+      ws_connected_ = true;
+      conn_cv_.notify_all();
+      kLog->info("connection ready");
+      return;
+    }
+
+    if (msg->type == ix::WebSocketMessageType::Close ||
+        msg->type == ix::WebSocketMessageType::Error) {
+      if (msg->type == ix::WebSocketMessageType::Error) {
+        kLog->warn("ws error: {} (retries={}, wait={}ms, http={})",
+                   msg->errorInfo.reason, msg->errorInfo.retries,
+                   msg->errorInfo.wait_time, msg->errorInfo.http_status);
+      }
+      std::string sid;
+      {
+        std::lock_guard<std::mutex> lock(conn_mu_);
+        ws_connected_ = false;
+        sid = session_id_;
+        conn_cv_.notify_all();
+      }
+      {
+        std::lock_guard<std::mutex> lock(setup_mu_);
+        setup_done_ = false;
+        setup_cv_.notify_all();
+      }
+      if (!sid.empty()) {
+        HandleSessionClosed("connection_lost");
+      }
+      return;
+    }
+
+    if (msg->type == ix::WebSocketMessageType::Message && !msg->binary) {
+      try {
+        const auto json_msg = nlohmann::json::parse(msg->str);
+        OnServerMessage(json_msg);
+      } catch (const nlohmann::json::parse_error& e) {
+        kLog->warn("ws json parse failed: {}", e.what());
+      } catch (const std::exception& e) {
+        kLog->warn("ws message handling failed: {}", e.what());
+      }
+    }
+  });
+
+  {
+    std::lock_guard<std::mutex> lock(conn_mu_);
+    ws_connected_ = false;
+  }
+
+  ws->start();
+
+  {
+    std::lock_guard<std::mutex> lock(conn_mu_);
+    ws_ = std::move(ws);
+  }
+
+  // Wait for the WebSocket to actually open before sending the setup message.
+  bool opened = false;
+  {
+    std::unique_lock<std::mutex> lock(conn_mu_);
+    const auto ws_open_timeout = std::min(timeout, std::chrono::milliseconds(8000));
+    opened = conn_cv_.wait_for(lock, ws_open_timeout, [this] { return ws_connected_; });
+  }
+  if (!opened) {
+    kLog->error("websocket open timeout");
+    CloseConnection(false);
+    return false;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(setup_mu_);
+    setup_done_ = false;
+  }
+
+  if (!SendJson(BuildSetupMessage())) {
+    kLog->error("send setup failed");
+    CloseConnection(false);
+    return false;
+  }
+
+  bool setup_ok = false;
+  {
+    std::unique_lock<std::mutex> lock(setup_mu_);
+    const auto setup_timeout = std::min(timeout, std::chrono::milliseconds(8000));
+    setup_ok = setup_cv_.wait_for(lock, setup_timeout, [this] { return setup_done_; });
+  }
+  if (!setup_ok) {
+    kLog->error("setup not acknowledged before timeout");
+    CloseConnection(false);
+    return false;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(conn_mu_);
+    ws_connected_ = true;
+  }
+  return true;
+}
+
+void Client::CloseConnection(bool) {
+  std::unique_ptr<ix::WebSocket> ws;
+  {
+    std::lock_guard<std::mutex> lock(conn_mu_);
+    ws_connected_ = false;
+    session_id_.clear();
+    ws = std::move(ws_);
+  }
+  {
+    std::lock_guard<std::mutex> lock(setup_mu_);
+    setup_done_ = false;
+    setup_cv_.notify_all();
+  }
+  if (ws) {
+    try {
+      ws->stop();
+    } catch (const std::system_error& e) {
+      kLog->error("ws stop failed with system_error: {}", e.what());
+    } catch (const std::exception& e) {
+      kLog->error("ws stop failed: {}", e.what());
+    } catch (...) {
+      kLog->error("ws stop failed: unknown exception");
+    }
+  }
+}
+
+nlohmann::json Client::BuildSetupMessage() const {
+  const auto& preset = cfg_.realtime.preset;
+
+  std::string model = preset.model;
+  if (model.rfind("models/", 0) != 0) {
+    model = "models/" + model;
+  }
+
+  std::string system_text;
+  if (!preset.bot_name.empty()) {
+    system_text += "你的名字是" + preset.bot_name + "。\n";
+  }
+  if (!preset.system_role.empty()) {
+    system_text += preset.system_role;
+    system_text += "\n";
+  }
+  if (!preset.speaking_style.empty()) {
+    system_text += preset.speaking_style;
+  }
+
+  nlohmann::json generation_config = {
+      {"responseModalities", nlohmann::json::array({"AUDIO"})},
+  };
+  if (!preset.voice.empty()) {
+    generation_config["speechConfig"] = {
+        {"voiceConfig",
+         {{"prebuiltVoiceConfig", {{"voiceName", preset.voice}}}}},
+    };
+  }
+
+  nlohmann::json realtime_input_config = {
+      {"automaticActivityDetection",
+       {{"startOfSpeechSensitivity", "START_SENSITIVITY_HIGH"},
+        {"endOfSpeechSensitivity", "END_SENSITIVITY_HIGH"},
+        {"prefixPaddingMs", 20},
+        {"silenceDurationMs", 500}}}};
+
+  nlohmann::json setup = {
+      {"model", std::move(model)},
+      {"generationConfig", std::move(generation_config)},
+      {"realtimeInputConfig", std::move(realtime_input_config)},
+      {"inputAudioTranscription", nlohmann::json::object()},
+  };
+  if (!system_text.empty()) {
+    setup["systemInstruction"] = {{"parts", nlohmann::json::array({{"text", system_text}})}};
+  }
+
+  return {{"setup", std::move(setup)}};
+}
+
+void Client::OnServerMessage(const nlohmann::json& msg) {
+  if (!msg.is_object()) {
+    return;
+  }
+  if (msg.contains("setupComplete")) {
+    HandleSetupComplete();
+    return;
+  }
+  if (msg.contains("serverContent")) {
+    HandleServerContent(msg["serverContent"]);
+    return;
+  }
+  if (msg.contains("goAway")) {
+    kLog->warn("server requested shutdown (goAway)");
+    return;
+  }
+}
+
+void Client::HandleSetupComplete() {
+  {
+    std::lock_guard<std::mutex> lock(setup_mu_);
+    setup_done_ = true;
+    setup_cv_.notify_all();
+  }
+  kLog->info("gemini setup complete");
+}
+
+void Client::HandleServerContent(const nlohmann::json& sc) {
+  if (!sc.is_object()) {
+    return;
+  }
+
+  // Model-generated audio (and text) turn.
+  auto turn_it = sc.find("modelTurn");
+  if (turn_it != sc.end() && turn_it->is_object()) {
+    const auto parts = turn_it->value("parts", nlohmann::json::array());
+    for (const auto& part : parts) {
+      if (!part.is_object()) {
+        continue;
+      }
+      auto data_it = part.find("inlineData");
+      if (data_it == part.end() || !data_it->is_object()) {
+        continue;
+      }
+      const auto mime = JsonString(*data_it, "mimeType");
+      const auto b64 = JsonString(*data_it, "data");
+      if (b64.empty()) {
+        continue;
+      }
+      const auto pcm = Base64Decode(b64);
+      if (pcm.empty()) {
+        continue;
+      }
+      const auto audio16k = ResampleTo16k(pcm, SampleRateFromMime(mime));
+      if (audio16k.empty()) {
+        continue;
+      }
+
+      bool set_speaking = false;
+      {
+        std::lock_guard<std::mutex> lock(event_mu_);
+        if (!is_ai_speaking_) {
+          is_ai_speaking_ = true;
+          set_speaking = true;
+        }
+      }
+      if (set_speaking && callbacks_.on_set_ai_speaking) {
+        kLog->info("gemini tts started");
+        callbacks_.on_set_ai_speaking(true);
+      }
+
+      if (callbacks_.on_audio) {
+        callbacks_.on_audio(audio16k);
+      }
+    }
+  }
+
+  // Settled transcription of user input (like a final ASR result).
+  auto input_it = sc.find("inputTranscription");
+  if (input_it != sc.end() && input_it->is_object()) {
+    const auto text = JsonString(*input_it, "text");
+    if (!text.empty()) {
+      kLog->info("asr final: '{}'", text);
+      if (callbacks_.on_asr_final) {
+        callbacks_.on_asr_final(text);
+      }
+      if (callbacks_.on_user_activity) {
+        callbacks_.on_user_activity();
+      }
+    }
+  }
+
+  // Low-latency transcription while the user is speaking.
+  auto interim_it = sc.find("interimInputTranscription");
+  if (interim_it != sc.end() && interim_it->is_object()) {
+    const auto text = JsonString(*interim_it, "text");
+    if (!text.empty() && callbacks_.on_user_activity) {
+      callbacks_.on_user_activity();
+    }
+  }
+
+  // Client input interrupted ongoing generation (barge-in).
+  if (sc.value("interrupted", false)) {
+    StopSpeaking();
+    if (callbacks_.on_user_activity) {
+      callbacks_.on_user_activity();
+    }
+  }
+
+  // Model finished generating / completed its turn.
+  if (sc.value("generationComplete", false) || sc.value("turnComplete", false)) {
+    StopSpeaking();
+    if (callbacks_.on_chat_ended) {
+      callbacks_.on_chat_ended();
+    }
+  }
+}
+
+void Client::StopSpeaking() {
+  bool was_speaking = false;
+  {
+    std::lock_guard<std::mutex> lock(event_mu_);
+    if (is_ai_speaking_) {
+      is_ai_speaking_ = false;
+      was_speaking = true;
+    }
+  }
+  if (was_speaking && callbacks_.on_set_ai_speaking) {
+    kLog->info("gemini tts ended");
+    callbacks_.on_set_ai_speaking(false);
+  }
+}
+
+void Client::HandleSessionClosed(const std::string& reason) {
+  {
+    std::lock_guard<std::mutex> lock(conn_mu_);
+    session_id_.clear();
+  }
+  {
+    std::lock_guard<std::mutex> lock(event_mu_);
+    is_ai_speaking_ = false;
+  }
+  if (callbacks_.on_set_ai_speaking) {
+    callbacks_.on_set_ai_speaking(false);
+  }
+  if (callbacks_.on_session_closed) {
+    callbacks_.on_session_closed(reason);
+  }
+}
+
+bool Client::SendJson(const nlohmann::json& msg) {
+  std::string text;
+  try {
+    text = msg.dump();
+  } catch (...) {
+    kLog->error("json dump failed");
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(write_mu_);
+  std::lock_guard<std::mutex> conn_lock(conn_mu_);
+  if (!ws_) {
+    return false;
+  }
+  const auto res = ws_->sendText(text);
+  return res.success;
+}
+
+bool Client::SendRealtimeAudio(const std::vector<uint8_t>& chunk) {
+  const nlohmann::json msg = {
+      {"realtimeInput",
+       {{"audio", {{"mimeType", kInputMimeType}, {"data", Base64Encode(chunk)}}}}}};
+  return SendJson(msg);
+}
+
+std::chrono::milliseconds Client::NextBackoff(int attempt) const {
+  int min_ms = cfg_.budget.reconnect_backoff_min_ms;
+  int max_ms = cfg_.budget.reconnect_backoff_max_ms;
+  if (min_ms <= 0) {
+    min_ms = 300;
+  }
+  if (max_ms < min_ms) {
+    max_ms = min_ms * 4;
+  }
+
+  int upper = min_ms << std::max(0, attempt - 1);
+  upper = std::min(upper, max_ms);
+  if (upper <= min_ms) {
+    return std::chrono::milliseconds(min_ms);
+  }
+
+  std::lock_guard<std::mutex> lock(rng_mu_);
+  std::uniform_int_distribution<int> dist(min_ms, upper);
+  return std::chrono::milliseconds(dist(rng_));
+}
+
+}  // namespace xiaoai_plus::realtime
