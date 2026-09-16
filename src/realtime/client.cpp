@@ -355,6 +355,9 @@ bool Client::OpenConnection(std::chrono::milliseconds timeout) {
         kLog->warn("ws error: {} (retries={}, wait={}ms, http={})",
                    msg->errorInfo.reason, msg->errorInfo.retries,
                    msg->errorInfo.wait_time, msg->errorInfo.http_status);
+      } else {
+        kLog->warn("ws closed: code={} reason='{}'", msg->closeInfo.code,
+                   msg->closeInfo.reason);
       }
       std::string sid;
       {
@@ -511,7 +514,11 @@ nlohmann::json Client::BuildSetupMessage() const {
       {"inputAudioTranscription", nlohmann::json::object()},
   };
   if (!system_text.empty()) {
-    setup["systemInstruction"] = {{"parts", nlohmann::json::array({{"text", system_text}})}};
+    nlohmann::json text_part = nlohmann::json::object();
+    text_part["text"] = system_text;
+    nlohmann::json system_instruction = nlohmann::json::object();
+    system_instruction["parts"] = nlohmann::json::array({text_part});
+    setup["systemInstruction"] = system_instruction;
   }
 
   return {{"setup", std::move(setup)}};
