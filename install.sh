@@ -2,12 +2,12 @@
 set -eu
 
 # 一行安装：
-# curl -sSfL https://raw.githubusercontent.com/kslr/xiaoai-plus/main/install.sh | sh
+# curl -sSfL https://raw.githubusercontent.com/dexterchock/xiaoai-gemini/main/install.sh | sh
 
 APP_DIR="${APP_DIR:-/data/xiaoai-plus}"
-JSDELIVR_ARCHIVE_URL="${JSDELIVR_ARCHIVE_URL:-https://fastly.jsdelivr.net/gh/kslr/xiaoai-plus@cdn/oh2p.tar.gz}"
+JSDELIVR_ARCHIVE_URL="${JSDELIVR_ARCHIVE_URL:-https://fastly.jsdelivr.net/gh/dexterchock/xiaoai-gemini@cdn/oh2p.tar.gz}"
 ARCHIVE_URL="${ARCHIVE_URL:-${JSDELIVR_ARCHIVE_URL}}"
-ARCHIVE_FALLBACK_URL="${ARCHIVE_FALLBACK_URL:-https://github.com/kslr/xiaoai-plus/releases/latest/download/oh2p.tar.gz}"
+ARCHIVE_FALLBACK_URL="${ARCHIVE_FALLBACK_URL:-https://github.com/dexterchock/xiaoai-gemini/releases/latest/download/oh2p.tar.gz}"
 MIN_SPACE_MB="${MIN_SPACE_MB:-100}"
 CHECK_DIR="${APP_DIR}"
 while [ ! -d "${CHECK_DIR}" ]; do
