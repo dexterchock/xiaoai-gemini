@@ -77,7 +77,6 @@ std::vector<uint8_t> Base64Decode(const std::string& in) {
 }
 
 int SampleRateFromMime(const std::string& mime) {
-  // e.g. "audio/pcm;rate=24000"
   const std::string kRate = "rate=";
   const auto pos = mime.find(kRate);
   if (pos == std::string::npos) {
@@ -92,7 +91,6 @@ int SampleRateFromMime(const std::string& mime) {
   return rate > 0 ? rate : kDefaultOutputSampleRate;
 }
 
-// Convert PCM s16le input to 16kHz mono using linear interpolation.
 std::vector<uint8_t> ResampleTo16k(const std::vector<uint8_t>& pcm, int rate_hz) {
   if (pcm.empty() || pcm.size() % 2 != 0) {
     return {};
@@ -272,13 +270,19 @@ bool Client::SendSayHello() {
     std::lock_guard<std::mutex> lock(conn_mu_);
     sid = session_id_;
   }
-  if (sid.empty()) {
+  if (sid.empty() || cfg_.wakeup.say_hello.empty()) {
     return true;
   }
-  if (cfg_.wakeup.say_hello.empty()) {
-    return true;
-  }
-  return SendJson({{"realtimeInput", {{"text", cfg_.wakeup.say_hello}}}});
+
+  const nlohmann::json msg = {
+      {"clientContent",
+       {{"turns",
+         nlohmann::json::array({{{"role", "user"},
+                                 {"parts", nlohmann::json::array(
+                                               {{{"text", cfg_.wakeup.say_hello}}})}}})},
+        {"turnComplete", true}}}};
+
+  return SendJson(msg);
 }
 
 bool Client::EnsureConnection(std::chrono::milliseconds timeout) {
@@ -329,7 +333,6 @@ bool Client::OpenConnection(std::chrono::milliseconds timeout) {
   ws_url += "key=";
   ws_url += cfg_.realtime.api_key;
 
-  // Log without the credentials in the query string.
   const auto query_pos = cfg_.realtime.preset.ws_url.find('?');
   const std::string log_url =
       query_pos == std::string::npos ? cfg_.realtime.preset.ws_url
@@ -339,6 +342,11 @@ bool Client::OpenConnection(std::chrono::milliseconds timeout) {
   auto ws = std::make_unique<ix::WebSocket>();
   ws->setUrl(ws_url);
   ws->disableAutomaticReconnection();
+
+  // Bypass embedded Linux SSL certificate checks
+  ix::SocketTLSOptions tls;
+  tls.caFile = "NONE";
+  ws->setTLSOptions(tls);
 
   ws->setOnMessageCallback([this](const ix::WebSocketMessagePtr& msg) {
     if (msg->type == ix::WebSocketMessageType::Open) {
@@ -401,7 +409,6 @@ bool Client::OpenConnection(std::chrono::milliseconds timeout) {
     ws_ = std::move(ws);
   }
 
-  // Wait for the WebSocket to actually open before sending the setup message.
   bool opened = false;
   {
     std::unique_lock<std::mutex> lock(conn_mu_);
@@ -480,7 +487,7 @@ nlohmann::json Client::BuildSetupMessage() const {
 
   std::string system_text;
   if (!preset.bot_name.empty()) {
-    system_text += "你的名字是" + preset.bot_name + "。\n";
+    system_text += "Your name is " + preset.bot_name + ".\n";
   }
   if (!preset.system_role.empty()) {
     system_text += preset.system_role;
@@ -500,17 +507,9 @@ nlohmann::json Client::BuildSetupMessage() const {
     };
   }
 
-  nlohmann::json realtime_input_config = {
-      {"automaticActivityDetection",
-       {{"startOfSpeechSensitivity", "START_SENSITIVITY_HIGH"},
-        {"endOfSpeechSensitivity", "END_SENSITIVITY_HIGH"},
-        {"prefixPaddingMs", 20},
-        {"silenceDurationMs", 500}}}};
-
   nlohmann::json setup = {
       {"model", std::move(model)},
       {"generationConfig", std::move(generation_config)},
-      {"realtimeInputConfig", std::move(realtime_input_config)},
       {"inputAudioTranscription", nlohmann::json::object()},
   };
   if (!system_text.empty()) {
@@ -556,7 +555,7 @@ void Client::HandleServerContent(const nlohmann::json& sc) {
     return;
   }
 
-  // Model-generated audio (and text) turn.
+  // Model audio response
   auto turn_it = sc.find("modelTurn");
   if (turn_it != sc.end() && turn_it->is_object()) {
     const auto parts = turn_it->value("parts", nlohmann::json::array());
@@ -601,7 +600,22 @@ void Client::HandleServerContent(const nlohmann::json& sc) {
     }
   }
 
-  // Settled transcription of user input (like a final ASR result).
+  // User input transcription parsing (support userTurn & inputTranscription)
+  auto user_turn_it = sc.find("userTurn");
+  if (user_turn_it != sc.end() && user_turn_it->is_object()) {
+    const auto parts = user_turn_it->value("parts", nlohmann::json::array());
+    for (const auto& part : parts) {
+      if (part.is_object() && part.contains("text")) {
+        const std::string text = part.value("text", "");
+        if (!text.empty()) {
+          kLog->info("asr final: '{}'", text);
+          if (callbacks_.on_asr_final) callbacks_.on_asr_final(text);
+          if (callbacks_.on_user_activity) callbacks_.on_user_activity();
+        }
+      }
+    }
+  }
+
   auto input_it = sc.find("inputTranscription");
   if (input_it != sc.end() && input_it->is_object()) {
     const auto text = JsonString(*input_it, "text");
@@ -616,16 +630,6 @@ void Client::HandleServerContent(const nlohmann::json& sc) {
     }
   }
 
-  // Low-latency transcription while the user is speaking.
-  auto interim_it = sc.find("interimInputTranscription");
-  if (interim_it != sc.end() && interim_it->is_object()) {
-    const auto text = JsonString(*interim_it, "text");
-    if (!text.empty() && callbacks_.on_user_activity) {
-      callbacks_.on_user_activity();
-    }
-  }
-
-  // Client input interrupted ongoing generation (barge-in).
   if (sc.value("interrupted", false)) {
     StopSpeaking();
     if (callbacks_.on_user_activity) {
@@ -633,7 +637,6 @@ void Client::HandleServerContent(const nlohmann::json& sc) {
     }
   }
 
-  // Model finished generating / completed its turn.
   if (sc.value("generationComplete", false) || sc.value("turnComplete", false)) {
     StopSpeaking();
     if (callbacks_.on_chat_ended) {
@@ -694,7 +697,9 @@ bool Client::SendJson(const nlohmann::json& msg) {
 bool Client::SendRealtimeAudio(const std::vector<uint8_t>& chunk) {
   const nlohmann::json msg = {
       {"realtimeInput",
-       {{"audio", {{"mimeType", kInputMimeType}, {"data", Base64Encode(chunk)}}}}}};
+       {{"mediaChunks",
+         nlohmann::json::array({{{"mimeType", kInputMimeType},
+                                 {"data", Base64Encode(chunk)}}})}}}};
   return SendJson(msg);
 }
 
