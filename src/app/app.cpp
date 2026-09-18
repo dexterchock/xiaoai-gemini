@@ -246,7 +246,7 @@ bool App::Run() {
 
   std::thread([]() {
     const int rc =
-        std::system("/usr/sbin/tts_play.sh 'System started' >/dev/null 2>&1");
+        std::system("/usr/sbin/tts_play.sh '谷歌已启动' >/dev/null 2>&1");
     if (rc != 0) {
       kLog->warn("startup tts command failed: rc={}", rc);
     }
