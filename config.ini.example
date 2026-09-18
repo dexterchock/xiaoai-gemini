@@ -1,13 +1,13 @@
 [realtime]
 api_key = your_google_api_key
 model = gemini-3.8-live
-bot_name = Gemini
-system_role = 你是 Gemini 同学，是小爱音箱上的语音助手。
-speaking_style = 语气自然、友好、简洁。
+bot_name = Google
+system_role = You are Google, a helpful voice assistant running on a smart speaker.
+speaking_style = Speak naturally, politely, and concisely.
 voice = Kore
 
 [wakeup]
-say_hello = 在
+say_hello = Hello
 
 [audio]
 playback_gain = 1.0
