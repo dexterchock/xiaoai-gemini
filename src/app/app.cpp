@@ -212,10 +212,10 @@ App::App(config::Config cfg) : cfg_(std::move(cfg)) {
 App::~App() { Stop(); }
 
 bool App::Run() {
-  kLog->info(
-      cfg_.audio.input_device, cfg_.audio.sample_rate, cfg_.audio.channels,
-      cfg_.audio.bits_per_sample, cfg_.audio.buffer_size, cfg_.audio.period_size,
-      kKwsThreshold);
+  kLog->info("app config: dev={}, rate={}, ch={}, bits={}, buf={}, period={}, kws_thresh={}",
+           cfg_.audio.input_device, cfg_.audio.sample_rate, cfg_.audio.channels,
+           cfg_.audio.bits_per_sample, cfg_.audio.buffer_size, cfg_.audio.period_size,
+           kKwsThreshold);
 
   {
     std::lock_guard<std::mutex> lock(state_mu_);
