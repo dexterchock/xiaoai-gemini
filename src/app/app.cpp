@@ -11,7 +11,6 @@
 #include <thread>
 
 #include "common/log.hpp"
-
 #include "wakeup/kws_zipformer.hpp"
 
 namespace xiaoai_plus::app {
@@ -60,7 +59,6 @@ EchoStats AnalyzeEcho(const std::vector<uint8_t>& mic_mono,
   stats.mic_rms = std::sqrt(mic_energy / static_cast<double>(n));
   stats.ref_rms = std::sqrt(ref_energy / static_cast<double>(n));
 
-  // Reference too weak, skip suppression.
   if (ref_energy < 1e7) {
     return stats;
   }
@@ -89,21 +87,16 @@ void ScalePcmS16InPlace(std::vector<uint8_t>* pcm, float gain) {
 }
 
 float ComputeUplinkGainWhileAiSpeaking(const EchoStats& stats) {
-  // Keep full-duplex: never hard-mute uplink while AI is speaking.
   if (!stats.valid_ref) {
     return 0.30f;
   }
 
-  // Echo-dominant: reference is strong, mic/reference ratio is low, and correlation is non-trivial.
   const bool echo_dominant =
       (stats.ref_rms > 1200.0 && stats.ratio < 0.55 && stats.corr > 0.06);
 
-  // Far-field speech can be low-RMS; avoid near-field-only thresholds.
-  // Treat low correlation or higher mic/reference ratio as near-end double-talk evidence.
   const bool has_near_end_speech = (stats.corr < 0.04 || stats.ratio > 0.70);
 
   if (echo_dominant) {
-    // Echo-only: strong suppression; double-talk: allow more uplink for user speech.
     return has_near_end_speech ? 0.34f : 0.006f;
   }
 
@@ -159,24 +152,21 @@ std::vector<std::string> LoadWakeupKeywords(const std::string& keywords_file) {
 }  // namespace
 
 App::App(config::Config cfg) : cfg_(std::move(cfg)) {
-  // Keep runtime behavior aligned with open-xiaoai defaults.
   cfg_.audio.input_device = "noop";
   cfg_.audio.output_device = "notify";
   cfg_.audio.sample_rate = 16000;
   cfg_.audio.channels = 4;
-  cfg_.audio.bits_per_sample = 32;  // Record S32_LE; PDM data is in lower 24 bits
+  cfg_.audio.bits_per_sample = 32;
   cfg_.audio.buffer_size = 1440;
   cfg_.audio.period_size = 360;
 
   recorder_ = std::make_unique<audio::ArecordRecorder>(cfg_.audio);
 
-  // Player always outputs mono S16; recording uses 4-ch S32 for better KWS sensitivity.
   config::Audio player_audio = cfg_.audio;
   player_audio.channels = 1;
   player_audio.bits_per_sample = 16;
   player_ = std::make_unique<audio::AplayPlayer>(player_audio, cfg_.budget.output_queue_frames);
 
-  // NS/AGC/AEC run on mono audio for uplink audio processing.
   aec_ = std::make_unique<dsp::AecWebrtc>(cfg_.audio.sample_rate, 1);
 
   wakeup::Hooks hooks;
@@ -200,8 +190,8 @@ App::App(config::Config cfg) : cfg_(std::move(cfg)) {
   kws_cfg.trigger = trigger_.get();
   kws_cfg.kws_engine = std::move(kws_engine);
   kws_cfg.sample_rate = cfg_.audio.sample_rate;
-  kws_cfg.channels = 1;  // KWS receives mono (downmixed from 4ch in OnInputAudio)
-  kws_cfg.bit_depth = 16;  // KWS receives S16 after ConvertS32ToS16
+  kws_cfg.channels = 1;
+  kws_cfg.bit_depth = 16;
   kws_cfg.min_trigger_interval_ms = kMinTriggerIntervalMs;
   kws_listener_ = std::make_unique<wakeup::LocalListener>(kws_cfg);
 
@@ -256,7 +246,7 @@ bool App::Run() {
 
   std::thread([]() {
     const int rc =
-        std::system("/usr/sbin/tts_play.sh '程序已启动' >/dev/null 2>&1");
+        std::system("/usr/sbin/tts_play.sh 'System started' >/dev/null 2>&1");
     if (rc != 0) {
       kLog->warn("startup tts command failed: rc={}", rc);
     }
@@ -319,15 +309,12 @@ void App::ConvertS32ToS16(const std::vector<uint8_t>& chunk, std::vector<uint8_t
   out->resize(n * sizeof(int16_t));
   auto* dst = reinterpret_cast<int16_t*>(out->data());
   for (size_t i = 0; i < n; ++i) {
-    // A113 PDM outputs 24-bit data in the lower 24 bits of S32_LE.
-    // Shift right by 8 to map correctly to S16 range.
     int32_t s = in[i] >> 8;
     if (s > 32767) s = 32767;
     if (s < -32768) s = -32768;
     dst[i] = static_cast<int16_t>(s);
   }
 }
-
 
 void App::DownmixToMono(const std::vector<uint8_t>& chunk, int channels,
                         std::vector<uint8_t>* out) {
@@ -346,7 +333,6 @@ void App::DownmixToMono(const std::vector<uint8_t>& chunk, int channels,
   const auto* in = reinterpret_cast<const int16_t*>(chunk.data());
   const size_t n_frames = chunk.size() / (sizeof(int16_t) * stride);
 
-  // Ch0-Ch2 are mics; Ch3 is playback reference on 4-ch capture.
   const int mic_channels = (channels == 4) ? 3 : std::max(1, channels);
 
   out->resize(n_frames * sizeof(int16_t));
@@ -359,9 +345,6 @@ void App::DownmixToMono(const std::vector<uint8_t>& chunk, int channels,
     return;
   }
 
-  // Delay-and-sum beamforming for 小爱音箱Pro 6-mic circular array.
-  // Diameter 7.4cm → max inter-mic distance 7.4cm → max delay ≈ 3 samples at 16kHz.
-  // Estimate per-channel delay relative to ch0 via cross-correlation, then align before summing.
   static constexpr int kMaxLag = 3;
 
   auto xcorr_lag = [&](int ch_a, int ch_b) -> int {
@@ -383,7 +366,6 @@ void App::DownmixToMono(const std::vector<uint8_t>& chunk, int channels,
     return best_lag;
   };
 
-  // lag_k: ch_k[t + lag_k] aligns with ch0[t].
   const int lag1 = xcorr_lag(0, 1);
   const int lag2 = (mic_channels >= 3) ? xcorr_lag(0, 2) : 0;
 
@@ -398,7 +380,6 @@ void App::DownmixToMono(const std::vector<uint8_t>& chunk, int channels,
     }
     dst[t] = static_cast<int16_t>(sum / mic_channels);
   }
-
 }
 
 void App::ExtractChannelS16(const std::vector<uint8_t>& chunk, int channels, int channel,
@@ -427,7 +408,6 @@ void App::ExtractChannelS16(const std::vector<uint8_t>& chunk, int channels, int
 
 void App::OnInputAudio(const std::vector<uint8_t>& chunk) {
   ConvertS32ToS16(chunk, &s16_buf_);
-  // AEC uses one stable mic channel for better linear echo model fitting.
   if (cfg_.audio.channels >= 2) {
     ExtractChannelS16(s16_buf_, cfg_.audio.channels, 0, &capture_mono_buf_);
   } else {
@@ -472,7 +452,6 @@ void App::OnInputAudio(const std::vector<uint8_t>& chunk) {
       }
     }
 
-    // Keep full-duplex uplink while suppressing self-playback leakage.
     if (ai_speaking) {
       const float gain = ComputeUplinkGainWhileAiSpeaking(echo_stats);
       if (gain < 0.999f) {
@@ -555,7 +534,13 @@ void App::OnAsrFinal(const std::string& text) {
   if (gate_ && gate_->step() == wakeup::Step::kActive) {
     gate_->RefreshTimeout();
   }
-  if (text.find("再见") != std::string::npos) {
+
+  std::string lower_text = text;
+  std::transform(lower_text.begin(), lower_text.end(), lower_text.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+
+  if (lower_text.find("bye") != std::string::npos ||
+      lower_text.find("goodbye") != std::string::npos) {
     std::lock_guard<std::mutex> lock(mu_);
     BeginFarewellStateLocked();
   }
@@ -573,7 +558,6 @@ void App::OnUserActivity() {
     should_interrupt = is_ai_speaking_ || pending_playback_chunks_ > 0;
     if (should_interrupt) {
       is_ai_speaking_ = false;
-      // User barge-in cancels pending auto-close on prior farewell turn.
       ResetFarewellStateLocked();
     }
   }
