@@ -537,12 +537,19 @@ void App::OnAsrFinal(const std::string& text) {
 
   std::string lower_text = text;
   std::transform(lower_text.begin(), lower_text.end(), lower_text.begin(),
-                 [](unsigned char c) { return std::tolower(c); });
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
-  if (lower_text.find("bye") != std::string::npos ||
-      lower_text.find("goodbye") != std::string::npos) {
-    std::lock_guard<std::mutex> lock(mu_);
-    BeginFarewellStateLocked();
+  static const std::vector<std::string> kSignoffs = {
+      "bye", "okay", "thanks", "that's it", "quit", "再见", "拜拜", "谢谢"
+  };
+
+  for (const auto& kw : kSignoffs) {
+    if (lower_text.find(kw) != std::string::npos) {
+      kLog->info("signoff matched: '{}'", kw);
+      std::lock_guard<std::mutex> lock(mu_);
+      BeginFarewellStateLocked();
+      break;
+    }
   }
 }
 
