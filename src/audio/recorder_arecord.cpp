@@ -36,9 +36,9 @@ bool ArecordRecorder::Start(std::function<void(const std::vector<uint8_t>&)> on_
   const int bytes_per_frame = bytes_per_sample * std::max(1, cfg_.channels);
   const int target_chunk = std::max(1, cfg_.buffer_size) * bytes_per_frame;
 
-  kLog->info(
-      cfg_.input_device, cfg_.sample_rate, cfg_.channels, cfg_.bits_per_sample, cfg_.buffer_size,
-      cfg_.period_size, target_chunk);
+  kLog->info("recorder config: dev={}, rate={}, ch={}, bits={}, buf={}, period={}, chunk={}",
+           cfg_.input_device, cfg_.sample_rate, cfg_.channels, cfg_.bits_per_sample,
+           cfg_.buffer_size, cfg_.period_size, target_chunk);
 
   int pipefd[2] = {-1, -1};
   if (pipe(pipefd) != 0) {
