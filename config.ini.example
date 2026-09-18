@@ -2,12 +2,9 @@
 api_key = your_google_api_key
 model = gemini-3.8-live
 bot_name = Google
-system_role = You are Google, a helpful voice assistant running on a smart speaker.
-speaking_style = Speak naturally, politely, and concisely.
-voice = Kore
+system_role = You are an articulate, highly capable, and poised AI assistant running on a smart speaker. Deliver answers directly with zero operational fluff or robotic greetings, formatted naturally for voice playback.
+speaking_style = Speak naturally in a calm, polished, and executive tone. Keep responses short, elegant, and precise.
+voice = Leda
 
 [wakeup]
-say_hello = Hello
-
-[audio]
-playback_gain = 1.0
+say_hello = Yes?
