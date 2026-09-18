@@ -8,10 +8,10 @@ struct RealtimePreset {
   std::string ws_url{
       "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage."
       "v1beta.GenerativeService.BidiGenerateContent"};
-  std::string model{"gemini-3.1-flash-live-preview"};
-  std::string bot_name{"Gemini"};
-  std::string system_role{"你是 Gemini 同学，是小爱音箱上的语音助手。"};
-  std::string speaking_style{"语气自然、友好、简洁。"};
+  std::string model{"gemini-3.8-live"};
+  std::string bot_name{"Google"};
+  std::string system_role{"You are Google, a helpful voice assistant running on a smart speaker."};
+  std::string speaking_style{"Speak naturally, politely, and concisely."};
   std::string voice{"Kore"};
 };
 
@@ -22,7 +22,7 @@ struct Realtime {
 
 struct AudioPreset {
   std::string input_device{"noop"};
-  std::string output_device{"default"};
+  std::string output_device{"notify"};
   int sample_rate{16000};
   int channels{1};
   int bits_per_sample{16};
@@ -33,7 +33,7 @@ struct AudioPreset {
 using Audio = AudioPreset;
 
 struct Wakeup {
-  std::string say_hello{"在"};
+  std::string say_hello{"Hello"};
   std::string keywords_file{"assets/keywords.txt"};
   std::string tokens_path{"assets/tokens.txt"};
   std::string encoder_path{"assets/encoder.onnx"};
