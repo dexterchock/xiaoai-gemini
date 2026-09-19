@@ -11,6 +11,7 @@ on:
       - armv7-linux-gnueabihf.cmake
       - install.sh
       - boot.sh
+      - shairport-sync.conf
       - .github/workflows/release.yml
   workflow_dispatch:
 
@@ -38,11 +39,22 @@ jobs:
             assets/sherpa_onnx_static
           key: sherpa-static-${{ runner.os }}-${{ hashFiles('toolchain/build-sherpa-static.sh', 'toolchain/Dockerfile', 'CMakeLists.txt') }}
 
+      - name: Cache shairport-sync static build outputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            assets/shairport-sync-src
+            assets/shairport-sync
+          key: shairport-static-${{ runner.os }}-${{ hashFiles('toolchain/build-shairport.sh', 'toolchain/Dockerfile') }}
+
       - name: Build cross toolchain image
         run: make -C toolchain build
 
       - name: Build sherpa-onnx static dependencies
         run: make -C toolchain build-sherpa-static
+
+      - name: Build shairport-sync static binary
+        run: make -C toolchain build-shairport
 
       - name: Cross compile armv7 release binary
         run: make -C toolchain compile
