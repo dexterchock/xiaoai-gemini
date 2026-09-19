@@ -71,6 +71,11 @@ jobs:
             dist/release/oh2p.tar.gz.sha256
           if-no-files-found: error
 
+      - name: Update latest tag to current commit
+        run: |
+          git tag -f latest ${{ github.sha }}
+          git push -f origin latest
+
       - name: Publish GitHub Release
         uses: ncipollo/release-action@v1
         with:
