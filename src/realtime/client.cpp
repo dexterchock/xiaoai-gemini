@@ -160,14 +160,14 @@ bool Client::StartSession(std::chrono::milliseconds timeout) {
     return false;
   }
 
-  {
-    std::lock_guard<std::mutex> lock(audio_mu_);
-    audio_queue_.clear();
-  }
-
   if (!EnsureConnection(timeout)) {
     kLog->error("start session failed: ensure connection failed");
     return false;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(audio_mu_);
+    audio_queue_.clear();
   }
 
   {
@@ -465,6 +465,7 @@ nlohmann::json Client::BuildSetupMessage() const {
   nlohmann::json setup = {
       {"model", std::move(model)},
       {"generationConfig", std::move(generation_config)},
+      {"inputAudioTranscription", nlohmann::json::object()},
   };
 
   if (preset.google_search) {
@@ -547,6 +548,9 @@ void Client::HandleServerContent(const nlohmann::json& sc) {
         }
       }
       auto data_it = part.find("inlineData");
+      if (data_it == part.end()) {
+        data_it = part.find("inline_data");
+      }
       if (data_it == part.end() || !data_it->is_object()) {
         continue;
       }
@@ -594,6 +598,9 @@ void Client::HandleServerContent(const nlohmann::json& sc) {
   }
 
   auto input_it = sc.find("inputTranscription");
+  if (input_it == sc.end()) {
+    input_it = sc.find("input_transcription");
+  }
   if (input_it != sc.end() && input_it->is_object()) {
     const auto text = JsonString(*input_it, "text");
     if (!text.empty()) {
@@ -678,12 +685,12 @@ bool Client::SendRealtimeAudio(const std::vector<uint8_t>& chunk) {
   }
 
   std::string text;
-  text.reserve(100 + ((chunk.size() + 2) / 3) * 4);
-  text.append(R"({"realtimeInput":{"mediaChunks":[{"mimeType":")");
+  text.reserve(80 + ((chunk.size() + 2) / 3) * 4);
+  text.append(R"({"realtimeInput":{"audio":{"mimeType":")");
   text.append(kInputMimeType);
   text.append(R"(","data":")");
   AppendBase64(chunk, &text);
-  text.append(R"("}]}})");
+  text.append(R"("}}})");
 
   std::lock_guard<std::mutex> lock(write_mu_);
   std::lock_guard<std::mutex> conn_lock(conn_mu_);
