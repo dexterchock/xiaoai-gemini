@@ -439,7 +439,7 @@ void App::OnInputAudio(const std::vector<uint8_t>& chunk) {
     bool ai_speaking = false;
     {
       std::lock_guard<std::mutex> lock(mu_);
-      ai_speaking = is_ai_speaking_;
+      ai_speaking = is_ai_speaking_ || (pending_playback_chunks_ > 0);
     }
 
     const std::vector<uint8_t>* api_audio = &capture_mono_buf_;
@@ -540,7 +540,7 @@ void App::OnAsrFinal(const std::string& text) {
                  [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
   static const std::vector<std::string> kSignoffs = {
-      "bye", "okay", "thanks", "that's it", "quit", "再见", "拜拜", "谢谢"
+      "bye", "goodbye", "that's all", "that's it", "quit", "exit", "stop", "再见", "拜拜", "退下", "退出"
   };
 
   for (const auto& kw : kSignoffs) {
@@ -626,13 +626,15 @@ void App::OnArm(const std::string& reason) {
     gate_->Disarm("session_start_failed");
     return;
   }
-  if (!client_->SendSayHello()) {
-    kLog->error("send say_hello failed");
-    client_->FinishSession(std::chrono::seconds(2));
-    gate_->Disarm("say_hello_failed");
-    return;
+  if (!cfg_.wakeup.say_hello.empty()) {
+    if (!client_->SendSayHello()) {
+      kLog->error("send say_hello failed");
+      client_->FinishSession(std::chrono::seconds(2));
+      gate_->Disarm("say_hello_failed");
+      return;
+    }
+    StartWelcomeTimer();
   }
-  StartWelcomeTimer();
 }
 
 void App::StartWelcomeTimer() {
