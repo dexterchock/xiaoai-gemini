@@ -521,6 +521,13 @@ nlohmann::json Client::BuildSetupMessage() const {
       {"model", std::move(model)},
       {"generationConfig", std::move(generation_config)},
   };
+
+  if (preset.google_search) {
+    setup["tools"] = nlohmann::json::array({
+        {{"googleSearch", nlohmann::json::object()}}
+    });
+  }
+
   if (!system_text.empty()) {
     nlohmann::json text_part = nlohmann::json::object();
     text_part["text"] = system_text;
@@ -569,6 +576,18 @@ void Client::HandleServerContent(const nlohmann::json& sc) {
     return;
   }
 
+  auto gm_it = sc.find("groundingMetadata");
+  if (gm_it != sc.end() && gm_it->is_object()) {
+    auto queries_it = gm_it->find("webSearchQueries");
+    if (queries_it != gm_it->end() && queries_it->is_array()) {
+      for (const auto& q : *queries_it) {
+        if (q.is_string()) {
+          kLog->info("google search query: '{}'", q.get<std::string>());
+        }
+      }
+    }
+  }
+
   auto turn_it = sc.find("modelTurn");
   if (turn_it != sc.end() && turn_it->is_object()) {
     const auto parts = turn_it->value("parts", nlohmann::json::array());
@@ -609,151 +628,4 @@ void Client::HandleServerContent(const nlohmann::json& sc) {
         }
       }
       if (set_speaking && callbacks_.on_set_ai_speaking) {
-        kLog->info("gemini tts started");
-        callbacks_.on_set_ai_speaking(true);
-      }
-
-      if (callbacks_.on_audio) {
-        callbacks_.on_audio(audio16k);
-      }
-    }
-  }
-
-  auto user_turn_it = sc.find("userTurn");
-  if (user_turn_it != sc.end() && user_turn_it->is_object()) {
-    const auto parts = user_turn_it->value("parts", nlohmann::json::array());
-    for (const auto& part : parts) {
-      if (part.is_object() && part.contains("text")) {
-        const std::string text = part.value("text", "");
-        if (!text.empty()) {
-          kLog->info("asr final: '{}'", text);
-          if (callbacks_.on_asr_final) callbacks_.on_asr_final(text);
-          if (callbacks_.on_user_activity) callbacks_.on_user_activity();
-        }
-      }
-    }
-  }
-
-  auto input_it = sc.find("inputTranscription");
-  if (input_it != sc.end() && input_it->is_object()) {
-    const auto text = JsonString(*input_it, "text");
-    if (!text.empty()) {
-      kLog->info("asr final: '{}'", text);
-      if (callbacks_.on_asr_final) {
-        callbacks_.on_asr_final(text);
-      }
-      if (callbacks_.on_user_activity) {
-        callbacks_.on_user_activity();
-      }
-    }
-  }
-
-  if (sc.value("interrupted", false)) {
-    kLog->info("gemini interrupted");
-    if (callbacks_.on_user_activity) {
-      callbacks_.on_user_activity();
-    }
-    StopSpeaking();
-  }
-
-  if (sc.value("generationComplete", false) || sc.value("turnComplete", false)) {
-    StopSpeaking();
-    if (callbacks_.on_chat_ended) {
-      callbacks_.on_chat_ended();
-    }
-  }
-}
-
-void Client::StopSpeaking() {
-  bool was_speaking = false;
-  {
-    std::lock_guard<std::mutex> lock(event_mu_);
-    if (is_ai_speaking_) {
-      is_ai_speaking_ = false;
-      was_speaking = true;
-    }
-  }
-  if (was_speaking && callbacks_.on_set_ai_speaking) {
-    kLog->info("gemini tts ended");
-    callbacks_.on_set_ai_speaking(false);
-  }
-}
-
-void Client::HandleSessionClosed(const std::string& reason) {
-  {
-    std::lock_guard<std::mutex> lock(conn_mu_);
-    session_id_.clear();
-  }
-  {
-    std::lock_guard<std::mutex> lock(event_mu_);
-    is_ai_speaking_ = false;
-  }
-  if (callbacks_.on_set_ai_speaking) {
-    callbacks_.on_set_ai_speaking(false);
-  }
-  if (callbacks_.on_session_closed) {
-    callbacks_.on_session_closed(reason);
-  }
-}
-
-bool Client::SendJson(const nlohmann::json& msg) {
-  std::string text;
-  try {
-    text = msg.dump();
-  } catch (...) {
-    kLog->error("json dump failed");
-    return false;
-  }
-  std::lock_guard<std::mutex> lock(write_mu_);
-  std::lock_guard<std::mutex> conn_lock(conn_mu_);
-  if (!ws_ || !ws_connected_) {
-    return false;
-  }
-  const auto res = ws_->sendText(text);
-  return res.success;
-}
-
-bool Client::SendRealtimeAudio(const std::vector<uint8_t>& chunk) {
-  if (chunk.empty()) {
-    return true;
-  }
-
-  std::string text;
-  text.reserve(100 + ((chunk.size() + 2) / 3) * 4);
-  text.append(R"({"realtimeInput":{"mediaChunks":[{"mimeType":")");
-  text.append(kInputMimeType);
-  text.append(R"(","data":")");
-  AppendBase64(chunk, &text);
-  text.append(R"("}]}})");
-
-  std::lock_guard<std::mutex> lock(write_mu_);
-  std::lock_guard<std::mutex> conn_lock(conn_mu_);
-  if (!ws_ || !ws_connected_) {
-    return false;
-  }
-  const auto res = ws_->sendText(text);
-  return res.success;
-}
-
-std::chrono::milliseconds Client::NextBackoff(int attempt) const {
-  int min_ms = cfg_.budget.reconnect_backoff_min_ms;
-  int max_ms = cfg_.budget.reconnect_backoff_max_ms;
-  if (min_ms <= 0) {
-    min_ms = 300;
-  }
-  if (max_ms < min_ms) {
-    max_ms = min_ms * 4;
-  }
-
-  int upper = min_ms << std::max(0, attempt - 1);
-  upper = std::min(upper, max_ms);
-  if (upper <= min_ms) {
-    return std::chrono::milliseconds(min_ms);
-  }
-
-  std::lock_guard<std::mutex> lock(rng_mu_);
-  std::uniform_int_distribution<int> dist(min_ms, upper);
-  return std::chrono::milliseconds(dist(rng_));
-}
-
-}  // namespace xiaoai_plus::realtime
+        kLog->info("gemini tts
