@@ -171,8 +171,15 @@ App::App(config::Config cfg) : cfg_(std::move(cfg)) {
   aec_ = std::make_unique<dsp::AecWebrtc>(cfg_.audio.sample_rate, 1);
 
   wakeup::Hooks hooks;
-  hooks.after_disarm = [this](const std::string&) { CancelWelcomeTimer(); };
-  hooks.on_arm = [this](const std::string& reason) { OnArm(reason); };
+  hooks.after_disarm = [this](const std::string&) {
+    CancelWelcomeTimer();
+    // Resume AirPlay audio when voice conversation ends
+    (void)std::system("killall -CONT shairport-sync >/dev/null 2>&1");
+  };
+  hooks.on_arm = [this](const std::string& reason) {
+    // Run OnArm asynchronously so audio capture is not blocked during TLS handshake
+    std::thread([this, reason]() { OnArm(reason); }).detach();
+  };
 
   gate_ = std::make_unique<wakeup::Gate>(std::chrono::seconds(kWakeupTimeoutSec), hooks);
 
@@ -627,6 +634,11 @@ void App::OnArm(const std::string& reason) {
     gate_->Disarm("session_start_failed");
     return;
   }
+  if (gate_->step() != wakeup::Step::kActive) {
+    kLog->info("on_arm cancelled: gate no longer active");
+    client_->FinishSession(std::chrono::seconds(2));
+    return;
+  }
   if (!cfg_.wakeup.say_hello.empty()) {
     if (!client_->SendSayHello()) {
       kLog->error("send say_hello failed");
@@ -744,6 +756,8 @@ void App::InterruptPlayback() {
   if (rc != 0) {
     kLog->warn("mphelper pause failed: rc={}", rc);
   }
+  // Pause AirPlay so music stops playing over the voice assistant
+  (void)std::system("killall -STOP shairport-sync >/dev/null 2>&1");
 }
 
 }  // namespace xiaoai_plus::app
