@@ -18,6 +18,7 @@ This project is built upon `kslr/xiaoai-plus`, retaining its audio capture, WebR
 * **Local Wake Word**: Sherpa-onnx Zipformer model for offline keyword detection.
 * **Far-field Processing**: WebRTC AEC, NS, and AGC integrated for echo cancellation and audio enhancement.
 * **Bilingual Signoff**: Auto-detects English and Chinese exit phrases (e.g., "bye", "exit", "quit", "再见", "拜拜").
+* **Google Search grounding**: Built-in real-time web search for live queries such as local weather, breaking news, and current events.
 
 ## Quick Start
 
@@ -47,6 +48,7 @@ bot_name = Google
 system_role = You are an articulate, highly capable, and poised AI assistant running on a smart speaker. Deliver answers directly with zero operational fluff or robotic greetings, formatted naturally for voice playback.
 speaking_style = Speak naturally in a calm, polished, and executive tone. Keep responses short, elegant, and precise.
 voice = Leda
+google_search = true
 
 [wakeup]
 say_hello = Yes?
