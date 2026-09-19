@@ -8,11 +8,11 @@ struct RealtimePreset {
   std::string ws_url{
       "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage."
       "v1beta.GenerativeService.BidiGenerateContent"};
-  std::string model{"gemini-3.8-live"};
+  std::string model{"gemini-2.0-flash-exp"};
   std::string bot_name{"Google"};
   std::string system_role{"You are Google, a helpful voice assistant running on a smart speaker."};
   std::string speaking_style{"Speak naturally, politely, and concisely."};
-  std::string voice{"Kore"};
+  std::string voice{"Aoede"};
 };
 
 struct Realtime {
