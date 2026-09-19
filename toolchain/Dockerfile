@@ -19,10 +19,11 @@ RUN dpkg --add-architecture armhf \
     && apt-get install -y --no-install-recommends \
       ca-certificates curl git \
       build-essential cmake ninja-build pkg-config python3 protobuf-compiler \
-      squashfs-tools \
+      squashfs-tools autoconf automake libtool \
       crossbuild-essential-armhf \
       libeigen3-dev \
       libssl-dev:armhf zlib1g-dev:armhf \
+      libasound2-dev:armhf libpopt-dev:armhf libconfig-dev:armhf \
       libwebrtc-audio-processing-dev:armhf \
     && rm -rf /var/lib/apt/lists/*
 
