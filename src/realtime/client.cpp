@@ -27,22 +27,23 @@ std::string GenSessionId() {
   return "sid-" + std::to_string(now);
 }
 
-std::string Base64Encode(const std::vector<uint8_t>& in) {
+void AppendBase64(const std::vector<uint8_t>& in, std::string* out) {
   static const char kAlphabet[] =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  std::string out;
-  out.reserve(((in.size() + 2) / 3) * 4);
-  for (size_t i = 0; i < in.size(); i += 3) {
-    const uint32_t b0 = in[i];
-    const uint32_t b1 = (i + 1 < in.size()) ? in[i + 1] : 0;
-    const uint32_t b2 = (i + 2 < in.size()) ? in[i + 2] : 0;
-    const uint32_t triple = (b0 << 16) | (b1 << 8) | b2;
-    out.push_back(kAlphabet[(triple >> 18) & 0x3F]);
-    out.push_back(kAlphabet[(triple >> 12) & 0x3F]);
-    out.push_back((i + 1 < in.size()) ? kAlphabet[(triple >> 6) & 0x3F] : '=');
-    out.push_back((i + 2 < in.size()) ? kAlphabet[triple & 0x3F] : '=');
+  if (!out) {
+    return;
   }
-  return out;
+  const size_t in_size = in.size();
+  for (size_t i = 0; i < in_size; i += 3) {
+    const uint32_t b0 = in[i];
+    const uint32_t b1 = (i + 1 < in_size) ? in[i + 1] : 0;
+    const uint32_t b2 = (i + 2 < in_size) ? in[i + 2] : 0;
+    const uint32_t triple = (b0 << 16) | (b1 << 8) | b2;
+    out->push_back(kAlphabet[(triple >> 18) & 0x3F]);
+    out->push_back(kAlphabet[(triple >> 12) & 0x3F]);
+    out->push_back((i + 1 < in_size) ? kAlphabet[(triple >> 6) & 0x3F] : '=');
+    out->push_back((i + 2 < in_size) ? kAlphabet[triple & 0x3F] : '=');
+  }
 }
 
 int DecodeBase64Char(char c) {
@@ -56,6 +57,7 @@ int DecodeBase64Char(char c) {
 
 std::vector<uint8_t> Base64Decode(const std::string& in) {
   std::vector<uint8_t> out;
+  out.reserve((in.size() * 3) / 4);
   uint32_t acc = 0;
   int bits = 0;
   for (char c : in) {
@@ -171,7 +173,7 @@ bool Client::Start() {
         std::lock_guard<std::mutex> lock(conn_mu_);
         connected = ws_ && ws_connected_ && !session_id_.empty();
       }
-      if (!connected) {
+      if (!connected || chunk.empty()) {
         continue;
       }
 
@@ -192,6 +194,7 @@ void Client::Stop() {
   }
 
   audio_cv_.notify_all();
+  conn_cv_.notify_all();
   setup_cv_.notify_all();
 
   CloseConnection(true);
@@ -210,6 +213,11 @@ bool Client::StartSession(std::chrono::milliseconds timeout) {
 
   if (!running_.load()) {
     return false;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(audio_mu_);
+    audio_queue_.clear();
   }
 
   if (!EnsureConnection(timeout)) {
@@ -292,7 +300,8 @@ bool Client::EnsureConnection(std::chrono::milliseconds timeout) {
   while (running_.load()) {
     {
       std::lock_guard<std::mutex> lock(conn_mu_);
-      if (ws_ && ws_connected_) {
+      std::lock_guard<std::mutex> setup_lock(setup_mu_);
+      if (ws_ && ws_connected_ && setup_done_) {
         return true;
       }
     }
@@ -343,7 +352,6 @@ bool Client::OpenConnection(std::chrono::milliseconds timeout) {
   ws->setUrl(ws_url);
   ws->disableAutomaticReconnection();
 
-  // Bypass embedded Linux SSL certificate checks
   ix::SocketTLSOptions tls;
   tls.caFile = "NONE";
   ws->setTLSOptions(tls);
@@ -444,10 +452,6 @@ bool Client::OpenConnection(std::chrono::milliseconds timeout) {
     return false;
   }
 
-  {
-    std::lock_guard<std::mutex> lock(conn_mu_);
-    ws_connected_ = true;
-  }
   return true;
 }
 
@@ -458,13 +462,19 @@ void Client::CloseConnection(bool) {
     ws_connected_ = false;
     session_id_.clear();
     ws = std::move(ws_);
+    conn_cv_.notify_all();
   }
   {
     std::lock_guard<std::mutex> lock(setup_mu_);
     setup_done_ = false;
     setup_cv_.notify_all();
   }
+  {
+    std::lock_guard<std::mutex> lock(audio_mu_);
+    audio_queue_.clear();
+  }
   if (ws) {
+    ws->setOnMessageCallback(nullptr);
     try {
       ws->stop();
     } catch (const std::system_error& e) {
@@ -510,7 +520,6 @@ nlohmann::json Client::BuildSetupMessage() const {
   nlohmann::json setup = {
       {"model", std::move(model)},
       {"generationConfig", std::move(generation_config)},
-      {"inputAudioTranscription", nlohmann::json::object()},
   };
   if (!system_text.empty()) {
     nlohmann::json text_part = nlohmann::json::object();
@@ -525,6 +534,11 @@ nlohmann::json Client::BuildSetupMessage() const {
 
 void Client::OnServerMessage(const nlohmann::json& msg) {
   if (!msg.is_object()) {
+    return;
+  }
+  if (msg.contains("error")) {
+    kLog->error("gemini server error: {}", msg["error"].dump());
+    HandleSessionClosed("server_error");
     return;
   }
   if (msg.contains("setupComplete")) {
@@ -555,13 +569,18 @@ void Client::HandleServerContent(const nlohmann::json& sc) {
     return;
   }
 
-  // Model audio response
   auto turn_it = sc.find("modelTurn");
   if (turn_it != sc.end() && turn_it->is_object()) {
     const auto parts = turn_it->value("parts", nlohmann::json::array());
     for (const auto& part : parts) {
       if (!part.is_object()) {
         continue;
+      }
+      if (part.contains("text")) {
+        const auto text = JsonString(part, "text");
+        if (!text.empty()) {
+          kLog->info("gemini text: '{}'", text);
+        }
       }
       auto data_it = part.find("inlineData");
       if (data_it == part.end() || !data_it->is_object()) {
@@ -600,7 +619,6 @@ void Client::HandleServerContent(const nlohmann::json& sc) {
     }
   }
 
-  // User input transcription parsing (support userTurn & inputTranscription)
   auto user_turn_it = sc.find("userTurn");
   if (user_turn_it != sc.end() && user_turn_it->is_object()) {
     const auto parts = user_turn_it->value("parts", nlohmann::json::array());
@@ -631,10 +649,11 @@ void Client::HandleServerContent(const nlohmann::json& sc) {
   }
 
   if (sc.value("interrupted", false)) {
-    StopSpeaking();
+    kLog->info("gemini interrupted");
     if (callbacks_.on_user_activity) {
       callbacks_.on_user_activity();
     }
+    StopSpeaking();
   }
 
   if (sc.value("generationComplete", false) || sc.value("turnComplete", false)) {
@@ -687,7 +706,7 @@ bool Client::SendJson(const nlohmann::json& msg) {
   }
   std::lock_guard<std::mutex> lock(write_mu_);
   std::lock_guard<std::mutex> conn_lock(conn_mu_);
-  if (!ws_) {
+  if (!ws_ || !ws_connected_) {
     return false;
   }
   const auto res = ws_->sendText(text);
@@ -695,12 +714,25 @@ bool Client::SendJson(const nlohmann::json& msg) {
 }
 
 bool Client::SendRealtimeAudio(const std::vector<uint8_t>& chunk) {
-  const nlohmann::json msg = {
-      {"realtimeInput",
-       {{"mediaChunks",
-         nlohmann::json::array({{{"mimeType", kInputMimeType},
-                                 {"data", Base64Encode(chunk)}}})}}}};
-  return SendJson(msg);
+  if (chunk.empty()) {
+    return true;
+  }
+
+  std::string text;
+  text.reserve(100 + ((chunk.size() + 2) / 3) * 4);
+  text.append(R"({"realtimeInput":{"mediaChunks":[{"mimeType":")");
+  text.append(kInputMimeType);
+  text.append(R"(","data":")");
+  AppendBase64(chunk, &text);
+  text.append(R"("}]}})");
+
+  std::lock_guard<std::mutex> lock(write_mu_);
+  std::lock_guard<std::mutex> conn_lock(conn_mu_);
+  if (!ws_ || !ws_connected_) {
+    return false;
+  }
+  const auto res = ws_->sendText(text);
+  return res.success;
 }
 
 std::chrono::milliseconds Client::NextBackoff(int attempt) const {
