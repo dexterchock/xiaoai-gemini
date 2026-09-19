@@ -17,7 +17,7 @@ RUN dpkg --add-architecture armhf \
       > /etc/apt/sources.list.d/armhf.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
-      ca-certificates curl git \
+      ca-certificates curl git bzip2 \
       build-essential cmake ninja-build pkg-config python3 protobuf-compiler \
       squashfs-tools autoconf automake libtool \
       crossbuild-essential-armhf \
