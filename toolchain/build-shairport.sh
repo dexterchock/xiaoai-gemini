@@ -24,6 +24,9 @@ docker run --rm \
   "${IMAGE_NAME}" \
   bash -lc '
     autoreconf -fi
+    export PKG_CONFIG_PATH="/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/share/pkgconfig"
+    export PKG_CONFIG_LIBDIR="/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/share/pkgconfig"
+    export PKG_CONFIG_SYSROOT_DIR=""
     ./configure \
       --host=arm-linux-gnueabihf \
       --with-alsa \
