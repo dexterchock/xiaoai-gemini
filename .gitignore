@@ -10,6 +10,10 @@ assets/onnxruntime-*-build-*
 assets/onnxruntime-src/
 assets/onnxruntime-*-src/
 assets/sherpa_onnx/
+assets/sherpa_onnx_static/
+assets/sherpa-onnx-src/
+assets/shairport-sync
+assets/shairport-sync-src/
 
 # CMake
 CMakeCache.txt
