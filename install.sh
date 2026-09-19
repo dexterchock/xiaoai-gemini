@@ -1,9 +1,6 @@
 #!/bin/sh
 set -eu
 
-# 一行安装：
-# curl -sSfL https://raw.githubusercontent.com/dexterchock/xiaoai-gemini/main/install.sh | sh
-
 APP_DIR="${APP_DIR:-/data/xiaoai-plus}"
 JSDELIVR_ARCHIVE_URL="${JSDELIVR_ARCHIVE_URL:-https://fastly.jsdelivr.net/gh/dexterchock/xiaoai-gemini@cdn/oh2p.tar.gz}"
 ARCHIVE_URL="${ARCHIVE_URL:-${JSDELIVR_ARCHIVE_URL}}"
@@ -67,6 +64,11 @@ echo "正在安装文件到 ${APP_DIR} ..."
 cp "${SRC_DIR}/xiaoai_plus_speaker" "${APP_DIR}/xiaoai_plus_speaker"
 chmod 0755 "${APP_DIR}/xiaoai_plus_speaker"
 
+if [ -f "${SRC_DIR}/shairport-sync" ]; then
+  cp "${SRC_DIR}/shairport-sync" "${APP_DIR}/shairport-sync"
+  chmod 0755 "${APP_DIR}/shairport-sync"
+fi
+
 cp "${SRC_DIR}/assets/decoder.onnx" "${APP_DIR}/assets/decoder.onnx"
 cp "${SRC_DIR}/assets/encoder.onnx" "${APP_DIR}/assets/encoder.onnx"
 cp "${SRC_DIR}/assets/joiner.onnx" "${APP_DIR}/assets/joiner.onnx"
@@ -83,6 +85,12 @@ if [ ! -f "${APP_DIR}/config.ini" ]; then
   mv "${SRC_DIR}/config.ini.example" "${APP_DIR}/config.ini"
   chmod 0644 "${APP_DIR}/config.ini"
   echo "已创建配置文件：${APP_DIR}/config.ini"
+fi
+
+if [ ! -f "${APP_DIR}/shairport-sync.conf" ] && [ -f "${SRC_DIR}/shairport-sync.conf" ]; then
+  cp "${SRC_DIR}/shairport-sync.conf" "${APP_DIR}/shairport-sync.conf"
+  chmod 0644 "${APP_DIR}/shairport-sync.conf"
+  echo "已创建 AirPlay 配置文件：${APP_DIR}/shairport-sync.conf"
 fi
 
 echo "安装完成：${APP_DIR}"
