@@ -11,6 +11,8 @@ ARCHIVE_PATH="${OUTPUT_DIR}/${ARCHIVE_NAME}"
 BINARY_PATH="${PROJECT_ROOT}/build-armv7/xiaoai_plus_speaker"
 CONFIG_EXAMPLE_PATH="${PROJECT_ROOT}/config.ini.example"
 ASSET_DIR="${PROJECT_ROOT}/assets"
+AIRPLAY_BIN="${ASSET_DIR}/shairport-sync"
+AIRPLAY_CONF="${PROJECT_ROOT}/shairport-sync.conf"
 
 require_file() {
   local f="$1"
@@ -22,6 +24,8 @@ require_file() {
 
 require_file "${BINARY_PATH}"
 require_file "${CONFIG_EXAMPLE_PATH}"
+require_file "${AIRPLAY_BIN}"
+require_file "${AIRPLAY_CONF}"
 require_file "${ASSET_DIR}/decoder.onnx"
 require_file "${ASSET_DIR}/encoder.onnx"
 require_file "${ASSET_DIR}/joiner.onnx"
@@ -32,7 +36,9 @@ rm -rf "${PACKAGE_DIR}"
 mkdir -p "${PACKAGE_DIR}/assets"
 
 install -m 0755 "${BINARY_PATH}" "${PACKAGE_DIR}/xiaoai_plus_speaker"
+install -m 0755 "${AIRPLAY_BIN}" "${PACKAGE_DIR}/shairport-sync"
 install -m 0644 "${CONFIG_EXAMPLE_PATH}" "${PACKAGE_DIR}/config.ini.example"
+install -m 0644 "${AIRPLAY_CONF}" "${PACKAGE_DIR}/shairport-sync.conf"
 install -m 0644 "${ASSET_DIR}/decoder.onnx" "${PACKAGE_DIR}/assets/decoder.onnx"
 install -m 0644 "${ASSET_DIR}/encoder.onnx" "${PACKAGE_DIR}/assets/encoder.onnx"
 install -m 0644 "${ASSET_DIR}/joiner.onnx" "${PACKAGE_DIR}/assets/joiner.onnx"
