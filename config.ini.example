@@ -8,3 +8,6 @@ voice = Leda
 
 [wakeup]
 say_hello = Yes?
+
+[audio]
+playback_gain = 1.0
