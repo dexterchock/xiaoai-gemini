@@ -34,7 +34,9 @@ bool AplayPlayer::Start() {
     running_.store(false);
     return false;
   }
-  kLog->info("player started");
+  kLog->info("player started: dev={}, rate={}, ch={}, bits={}, buf={}, period={}",
+             cfg_.output_device, cfg_.sample_rate, cfg_.channels,
+             cfg_.bits_per_sample, cfg_.buffer_size, cfg_.period_size);
   return true;
 }
 
