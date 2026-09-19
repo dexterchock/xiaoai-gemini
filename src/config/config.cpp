@@ -125,6 +125,17 @@ void SetIfPresent(const std::unordered_map<std::string, std::string>& kv, const 
   }
 }
 
+void SetIfPresent(const std::unordered_map<std::string, std::string>& kv, const std::string& key,
+                  bool* out) {
+  auto it = kv.find(key);
+  if (it != kv.end()) {
+    std::string val = it->second;
+    std::transform(val.begin(), val.end(), val.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    *out = (val == "true" || val == "1" || val == "yes" || val == "on");
+  }
+}
+
 }  // namespace
 
 void Config::normalize() {
@@ -156,6 +167,7 @@ Config load(const std::string& path) {
       SetIfPresent(kv, "speaking_style", &cfg.realtime.preset.speaking_style);
       SetIfPresent(kv, "voice", &cfg.realtime.preset.voice);
       SetIfPresent(kv, "ws_url", &cfg.realtime.preset.ws_url);
+      SetIfPresent(kv, "google_search", &cfg.realtime.preset.google_search);
     }
 
     if (auto it = sections.find("wakeup"); it != sections.end()) {
