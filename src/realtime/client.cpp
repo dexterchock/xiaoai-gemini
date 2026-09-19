@@ -19,8 +19,6 @@ namespace {
 const auto kLog = xiaoai_plus::GetLogger("realtime");
 
 constexpr const char* kInputMimeType = "audio/pcm;rate=16000";
-constexpr int kTargetSampleRate = 16000;
-constexpr int kDefaultOutputSampleRate = 24000;
 
 std::string GenSessionId() {
   const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
@@ -74,59 +72,6 @@ std::vector<uint8_t> Base64Decode(const std::string& in) {
       bits -= 8;
       out.push_back(static_cast<uint8_t>((acc >> bits) & 0xFF));
     }
-  }
-  return out;
-}
-
-int SampleRateFromMime(const std::string& mime) {
-  const std::string kRate = "rate=";
-  const auto pos = mime.find(kRate);
-  if (pos == std::string::npos) {
-    return kDefaultOutputSampleRate;
-  }
-  int rate = 0;
-  for (size_t i = pos + kRate.size(); i < mime.size() &&
-                                      std::isdigit(static_cast<unsigned char>(mime[i]));
-       ++i) {
-    rate = rate * 10 + (mime[i] - '0');
-  }
-  return rate > 0 ? rate : kDefaultOutputSampleRate;
-}
-
-std::vector<uint8_t> ResampleTo16k(const std::vector<uint8_t>& pcm, int rate_hz) {
-  if (pcm.empty() || pcm.size() % 2 != 0) {
-    return {};
-  }
-  if (rate_hz <= 0) {
-    rate_hz = kDefaultOutputSampleRate;
-  }
-  const size_t n_in = pcm.size() / 2;
-  if (n_in == 0) {
-    return {};
-  }
-  if (rate_hz == kTargetSampleRate) {
-    return pcm;
-  }
-  const double ratio = static_cast<double>(kTargetSampleRate) / static_cast<double>(rate_hz);
-  const size_t n_out = static_cast<size_t>(static_cast<double>(n_in) * ratio);
-  if (n_out == 0) {
-    return {};
-  }
-  std::vector<uint8_t> out(n_out * 2);
-  const auto* in = reinterpret_cast<const int16_t*>(pcm.data());
-  auto* dst = reinterpret_cast<int16_t*>(out.data());
-  for (size_t i = 0; i < n_out; ++i) {
-    const double pos = static_cast<double>(i) / ratio;
-    size_t i0 = static_cast<size_t>(pos);
-    size_t i1 = i0 + 1;
-    if (i1 >= n_in) {
-      i1 = n_in - 1;
-    }
-    const double frac = pos - static_cast<double>(i0);
-    const double s = static_cast<double>(in[i0]) * (1.0 - frac) +
-                     static_cast<double>(in[i1]) * frac;
-    const int32_t v = static_cast<int32_t>(std::lround(s));
-    dst[i] = static_cast<int16_t>(std::max(-32768, std::min(32767, v)));
   }
   return out;
 }
@@ -605,17 +550,12 @@ void Client::HandleServerContent(const nlohmann::json& sc) {
       if (data_it == part.end() || !data_it->is_object()) {
         continue;
       }
-      const auto mime = JsonString(*data_it, "mimeType");
       const auto b64 = JsonString(*data_it, "data");
       if (b64.empty()) {
         continue;
       }
       const auto pcm = Base64Decode(b64);
       if (pcm.empty()) {
-        continue;
-      }
-      const auto audio16k = ResampleTo16k(pcm, SampleRateFromMime(mime));
-      if (audio16k.empty()) {
         continue;
       }
 
@@ -633,7 +573,7 @@ void Client::HandleServerContent(const nlohmann::json& sc) {
       }
 
       if (callbacks_.on_audio) {
-        callbacks_.on_audio(audio16k);
+        callbacks_.on_audio(pcm);
       }
     }
   }
