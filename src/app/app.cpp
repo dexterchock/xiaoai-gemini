@@ -163,6 +163,7 @@ App::App(config::Config cfg) : cfg_(std::move(cfg)) {
   recorder_ = std::make_unique<audio::ArecordRecorder>(cfg_.audio);
 
   config::Audio player_audio = cfg_.audio;
+  player_audio.sample_rate = 24000;
   player_audio.channels = 1;
   player_audio.bits_per_sample = 16;
   player_ = std::make_unique<audio::AplayPlayer>(player_audio, cfg_.budget.output_queue_frames);
