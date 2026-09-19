@@ -1,12 +1,12 @@
 #!/bin/sh
 set -eu
 
-# 纯自启动脚本：开机时拉起 xiaoai_plus_speaker
-
 APP_DIR="/data/xiaoai-plus"
 BIN_PATH="/data/xiaoai-plus/xiaoai_plus_speaker"
 CFG_PATH="/data/xiaoai-plus/config.ini"
 LOG_PATH="/data/xiaoai-plus/xiaoai_plus.log"
+AIRPLAY_BIN="/data/xiaoai-plus/shairport-sync"
+AIRPLAY_CFG="/data/xiaoai-plus/shairport-sync.conf"
 WAIT_HOST="223.5.5.5"
 WAIT_SECONDS=60
 
@@ -37,11 +37,23 @@ fi
 
 PIDS="$(ps | grep '[x]iaoai_plus_speaker' | awk '{print $1}')"
 if [ -n "${PIDS}" ]; then
-  echo "检测到旧进程，正在停止..."
+  echo "检测到旧语音助手进程，正在停止..."
   kill ${PIDS} >/dev/null 2>&1 || true
-  sleep 1
 fi
 
+PIDS_AP="$(ps | grep '[s]hairport-sync' | awk '{print $1}')"
+if [ -n "${PIDS_AP}" ]; then
+  echo "检测到旧 AirPlay 进程，正在停止..."
+  kill ${PIDS_AP} >/dev/null 2>&1 || true
+fi
+sleep 1
+
 cd "${APP_DIR}"
+
+if [ -x "${AIRPLAY_BIN}" ] && [ -f "${AIRPLAY_CFG}" ]; then
+  echo "启动 AirPlay 接收服务..."
+  "${AIRPLAY_BIN}" -c "${AIRPLAY_CFG}" -d >/dev/null 2>&1 || true
+fi
+
 "${BIN_PATH}" -c "${CFG_PATH}" >>"${LOG_PATH}" 2>&1 &
 echo "启动完成，日志文件：${LOG_PATH}"
