@@ -310,7 +310,7 @@ void App::ConvertS32ToS16(const std::vector<uint8_t>& chunk, std::vector<uint8_t
   out->resize(n * sizeof(int16_t));
   auto* dst = reinterpret_cast<int16_t*>(out->data());
   for (size_t i = 0; i < n; ++i) {
-    int32_t s = in[i] >> 16;
+    int32_t s = in[i] >> 8;
     if (s > 32767) s = 32767;
     if (s < -32768) s = -32768;
     dst[i] = static_cast<int16_t>(s);
