@@ -17,7 +17,7 @@ class LocalListener {
     Gate* gate{nullptr};
     Trigger* trigger{nullptr};
     std::shared_ptr<IKwsEngine> kws_engine;
-    int sample_rate{24000};
+    int sample_rate{16000};
     int channels{1};
     int bit_depth{16};
     int min_trigger_interval_ms{1500};
