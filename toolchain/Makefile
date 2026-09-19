@@ -2,13 +2,16 @@ IMAGE_NAME ?= xiaoai-plus-toolchain:dev
 PROJECT_ROOT := $(abspath ..)
 RUNTIME_TEST_IMAGE_NAME := xiaoai-plus-runtime-test:dev
 
-.PHONY: build build-sherpa-static compile runtime-test-image runtime-smoke-test
+.PHONY: build build-sherpa-static build-shairport compile runtime-test-image runtime-smoke-test
 
 build:
 	docker build -t $(IMAGE_NAME) $(CURDIR)
 
 build-sherpa-static:
 	bash $(CURDIR)/build-sherpa-static.sh
+
+build-shairport:
+	bash $(CURDIR)/build-shairport.sh
 
 compile:
 	@test -f "$(PROJECT_ROOT)/assets/sherpa_onnx_static/include/sherpa-onnx/c-api/cxx-api.h" || \
