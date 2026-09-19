@@ -23,23 +23,24 @@ docker run --rm \
   -w /workspace/assets/shairport-sync-src \
   "${IMAGE_NAME}" \
   bash -lc '
-    autoreconf -fi
-    export PKG_CONFIG_PATH="/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/share/pkgconfig"
-    export PKG_CONFIG_LIBDIR="/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/share/pkgconfig"
-    export PKG_CONFIG_SYSROOT_DIR=""
-    ./configure \
-      --host=arm-linux-gnueabihf \
-      --with-alsa \
-      --with-tinysvcmdns \
-      --with-ssl=openssl \
-      --with-metadata \
-      --without-soxr \
-      CFLAGS="-O2 -march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard" \
-      LDFLAGS="-static -L/usr/lib/arm-linux-gnueabihf"
-    make -j$(nproc)
-    arm-linux-gnueabihf-strip shairport-sync
-    cp shairport-sync /workspace/assets/shairport-sync
-  '
+    set -euo pipefail
+    git config --global --add safe.directory "*"
 
-echo "==> Static shairport-sync built successfully: ${OUTPUT_BIN}"
-ls -lh "${OUTPUT_BIN}"
+    # Build static libasound.a if not already installed in container
+    if [ ! -f /usr/lib/arm-linux-gnueabihf/libasound.a ]; then
+      echo "==> Compiling static libasound.a for ARMv7..."
+      ALSA_VERSION="1.2.12"
+      curl -fL "https://www.alsa-project.org/files/pub/lib/alsa-lib-${ALSA_VERSION}.tar.bz2" -o /tmp/alsa-lib.tar.bz2 || \
+      curl -fL "https://github.com/alsa-project/alsa-lib/releases/download/v${ALSA_VERSION}/alsa-lib-${ALSA_VERSION}.tar.bz2" -o /tmp/alsa-lib.tar.bz2
+      tar -xjf /tmp/alsa-lib.tar.bz2 -C /tmp
+      cd "/tmp/alsa-lib-${ALSA_VERSION}"
+      ./configure \
+        --host=arm-linux-gnueabihf \
+        --enable-static \
+        --disable-shared \
+        --prefix=/usr \
+        --libdir=/usr/lib/arm-linux-gnueabihf \
+        --disable-python
+      make -j$(nproc)
+      make install
+      cp -a /usr/lib/arm-linux-gnueabihf/libasound.a /opt/sysroot/usr/lib/ 2>/dev/null |
