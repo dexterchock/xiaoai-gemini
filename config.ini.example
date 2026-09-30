@@ -5,7 +5,9 @@ bot_name = Google
 system_role = You are an articulate, highly capable, and poised AI assistant running on a smart speaker. Deliver answers directly with zero operational fluff or robotic greetings, formatted naturally for voice playback.
 speaking_style = Speak naturally in a calm, polished, and executive tone. Keep responses short, elegant, and precise.
 voice = Leda
-google_search = true
+# Note: Google Search tool requires a Google Cloud project with a billing card linked.
+# Keep set to false for unbilled free-tier keys.
+google_search = false
 
 [wakeup]
 say_hello = Yes?
