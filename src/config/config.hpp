@@ -7,13 +7,13 @@ namespace xiaoai_plus::config {
 struct RealtimePreset {
   std::string ws_url{
       "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage."
-      "v1beta.GenerativeService.BidiGenerateContent"};
+      "v1alpha.GenerativeService.BidiGenerateContent"};
   std::string model{"gemini-3.8-live"};
   std::string bot_name{"Google"};
   std::string system_role{"You are Google, a helpful voice assistant running on a smart speaker."};
   std::string speaking_style{"Speak naturally, politely, and concisely."};
   std::string voice{"Leda"};
-  bool google_search{true};
+  bool google_search{false};
 };
 
 struct Realtime {
