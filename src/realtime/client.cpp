@@ -343,7 +343,7 @@ bool Client::OpenConnection(std::chrono::milliseconds timeout) {
         const auto json_msg = nlohmann::json::parse(msg->str);
         OnServerMessage(json_msg);
       } catch (const nlohmann::json::parse_error& e) {
-        kLog->warn("ws json parse failed: {}", e.what());
+        kLog->warn("ws json parse failed: {} (raw: {})", e.what(), msg->str);
       } catch (const std::exception& e) {
         kLog->warn("ws message handling failed: {}", e.what());
       }
@@ -419,7 +419,8 @@ void Client::CloseConnection(bool) {
     audio_queue_.clear();
   }
   if (ws) {
-    ws->setOnMessageCallback(nullptr);
+    // Replace callback with no-op lambda instead of nullptr to prevent bad_function_call abort
+    ws->setOnMessageCallback([](const ix::WebSocketMessagePtr&) {});
     try {
       ws->stop();
     } catch (const std::system_error& e) {
@@ -489,12 +490,15 @@ void Client::OnServerMessage(const nlohmann::json& msg) {
   if (!msg.is_object()) {
     return;
   }
+
+  kLog->info("server msg: {}", msg.dump());
+
   if (msg.contains("error")) {
     kLog->error("gemini server error: {}", msg["error"].dump());
     HandleSessionClosed("server_error");
     return;
   }
-  if (msg.contains("setupComplete")) {
+  if (msg.contains("setupComplete") || msg.contains("setup_complete")) {
     HandleSetupComplete();
     return;
   }
@@ -502,7 +506,11 @@ void Client::OnServerMessage(const nlohmann::json& msg) {
     HandleServerContent(msg["serverContent"]);
     return;
   }
-  if (msg.contains("goAway")) {
+  if (msg.contains("server_content")) {
+    HandleServerContent(msg["server_content"]);
+    return;
+  }
+  if (msg.contains("goAway") || msg.contains("go_away")) {
     kLog->warn("server requested shutdown (goAway)");
     return;
   }
@@ -523,8 +531,14 @@ void Client::HandleServerContent(const nlohmann::json& sc) {
   }
 
   auto gm_it = sc.find("groundingMetadata");
+  if (gm_it == sc.end()) {
+    gm_it = sc.find("grounding_metadata");
+  }
   if (gm_it != sc.end() && gm_it->is_object()) {
     auto queries_it = gm_it->find("webSearchQueries");
+    if (queries_it == gm_it->end()) {
+      queries_it = gm_it->find("web_search_queries");
+    }
     if (queries_it != gm_it->end() && queries_it->is_array()) {
       for (const auto& q : *queries_it) {
         if (q.is_string()) {
@@ -535,6 +549,9 @@ void Client::HandleServerContent(const nlohmann::json& sc) {
   }
 
   auto turn_it = sc.find("modelTurn");
+  if (turn_it == sc.end()) {
+    turn_it = sc.find("model_turn");
+  }
   if (turn_it != sc.end() && turn_it->is_object()) {
     const auto parts = turn_it->value("parts", nlohmann::json::array());
     for (const auto& part : parts) {
@@ -583,6 +600,9 @@ void Client::HandleServerContent(const nlohmann::json& sc) {
   }
 
   auto user_turn_it = sc.find("userTurn");
+  if (user_turn_it == sc.end()) {
+    user_turn_it = sc.find("user_turn");
+  }
   if (user_turn_it != sc.end() && user_turn_it->is_object()) {
     const auto parts = user_turn_it->value("parts", nlohmann::json::array());
     for (const auto& part : parts) {
@@ -622,7 +642,8 @@ void Client::HandleServerContent(const nlohmann::json& sc) {
     StopSpeaking();
   }
 
-  if (sc.value("generationComplete", false) || sc.value("turnComplete", false)) {
+  if (sc.value("generationComplete", false) || sc.value("generation_complete", false) ||
+      sc.value("turnComplete", false) || sc.value("turn_complete", false)) {
     StopSpeaking();
     if (callbacks_.on_chat_ended) {
       callbacks_.on_chat_ended();
