@@ -338,7 +338,7 @@ bool Client::OpenConnection(std::chrono::milliseconds timeout) {
       return;
     }
 
-    if (msg->type == ix::WebSocketMessageType::Message && !msg->binary) {
+    if (msg->type == ix::WebSocketMessageType::Message) {
       try {
         const auto json_msg = nlohmann::json::parse(msg->str);
         OnServerMessage(json_msg);
@@ -379,7 +379,9 @@ bool Client::OpenConnection(std::chrono::milliseconds timeout) {
     setup_done_ = false;
   }
 
-  if (!SendJson(BuildSetupMessage())) {
+  const auto setup_msg = BuildSetupMessage();
+  kLog->info("sending setup: {}", setup_msg.dump());
+  if (!SendJson(setup_msg)) {
     kLog->error("send setup failed");
     CloseConnection(false);
     return false;
@@ -419,7 +421,6 @@ void Client::CloseConnection(bool) {
     audio_queue_.clear();
   }
   if (ws) {
-    // Replace callback with no-op lambda instead of nullptr to prevent bad_function_call abort
     ws->setOnMessageCallback([](const ix::WebSocketMessagePtr&) {});
     try {
       ws->stop();
@@ -466,7 +467,6 @@ nlohmann::json Client::BuildSetupMessage() const {
   nlohmann::json setup = {
       {"model", std::move(model)},
       {"generationConfig", std::move(generation_config)},
-      {"inputAudioTranscription", nlohmann::json::object()},
   };
 
   if (preset.google_search) {
