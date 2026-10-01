@@ -8,6 +8,7 @@ LOG_PATH="/data/xiaoai-plus/xiaoai_plus.log"
 AIRPLAY_BIN="/data/xiaoai-plus/shairport-sync"
 AIRPLAY_CFG="/data/xiaoai-plus/shairport-sync.conf"
 AIRPLAY_LOG="/data/xiaoai-plus/shairport.log"
+AIRPLAY_HOOK="/data/xiaoai-plus/airplay-hook.sh"
 AIRPLAY_ALSA_DEV="notify"
 WAIT_HOST="223.5.5.5"
 WAIT_SECONDS=60
@@ -40,6 +41,7 @@ fi
 PIDS="$(ps | grep '[x]iaoai_plus_speaker' | awk '{print $1}' || true)"
 if [ -n "${PIDS}" ]; then
   echo "检测到旧语音助手进程，正在停止..."
+  kill -CONT ${PIDS} >/dev/null 2>&1 || true
   kill ${PIDS} >/dev/null 2>&1 || true
 fi
 
@@ -50,9 +52,29 @@ if [ -n "${PIDS_AP}" ]; then
   kill -CONT ${PIDS_AP} >/dev/null 2>&1 || true
   kill ${PIDS_AP} >/dev/null 2>&1 || true
 fi
+
+# 确保小爱原生唤醒进程没有被上次异常退出遗留的 SIGSTOP 冻结
+PIDS_MI="$(pidof mipns-xiaomi 2>/dev/null || true)"
+if [ -n "${PIDS_MI}" ]; then
+  kill -CONT ${PIDS_MI} >/dev/null 2>&1 || true
+fi
 sleep 1
 
 cd "${APP_DIR}"
+
+# AirPlay 播放期间冻结语音助手和小爱唤醒进程以释放 CPU，
+# AirPlay 空闲（停止播放约 10 秒后）自动恢复。由 shairport-sync 的
+# run_this_before_entering_active_state / run_this_after_exiting_active_state 调用。
+cat > "${AIRPLAY_HOOK}" <<'HOOK'
+#!/bin/sh
+PIDS="$(pidof xiaoai_plus_speaker mipns-xiaomi 2>/dev/null || true)"
+case "${1:-}" in
+  start) [ -n "${PIDS}" ] && kill -STOP ${PIDS} ;;
+  stop)  [ -n "${PIDS}" ] && kill -CONT ${PIDS} ;;
+esac
+exit 0
+HOOK
+chmod +x "${AIRPLAY_HOOK}"
 
 # shairport-sync 编译时未启用 libdaemon，不支持 -d / -j，用 & 放到后台。
 # 静态链接的 ALSA 无法打开设备（dmix unable to open slave），
