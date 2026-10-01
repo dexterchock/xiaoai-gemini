@@ -527,4 +527,268 @@ void App::OnAudio(const std::vector<uint8_t>& chunk) {
       if (pending_playback_chunks_ > 0) {
         --pending_playback_chunks_;
       }
-      if (pending_playback_chunks_
+      if (pending_playback_chunks_ == 0) {
+        ai_speech_stop_time_ = std::chrono::steady_clock::now();
+      }
+    }
+    kLog->warn("player queue full, drop tts chunk: bytes={}", chunk.size());
+    TryFinalizeFarewell();
+  }
+}
+
+void App::OnPlaybackChunkPlayed() {
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (pending_playback_chunks_ > 0) {
+      --pending_playback_chunks_;
+    }
+    if (pending_playback_chunks_ == 0) {
+      ai_speech_stop_time_ = std::chrono::steady_clock::now();
+    }
+  }
+  TryFinalizeFarewell();
+}
+
+void App::OnSetAiSpeaking(bool is_speaking) {
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    is_ai_speaking_ = is_speaking;
+    if (is_speaking && farewell_pending_) {
+      farewell_tts_started_ = true;
+    }
+    if (!is_speaking) {
+      ai_speech_stop_time_ = std::chrono::steady_clock::now();
+    }
+  }
+  if (gate_) {
+    gate_->SetAiSpeaking(is_speaking);
+  }
+  if (!is_speaking) {
+    TryFinalizeFarewell();
+  }
+}
+
+void App::OnAsrFinal(const std::string& text) {
+  if (gate_ && gate_->step() == wakeup::Step::kActive) {
+    gate_->RefreshTimeout();
+  }
+
+  std::string lower_text = text;
+  std::transform(lower_text.begin(), lower_text.end(), lower_text.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+  static const std::vector<std::string> kSignoffs = {
+      "bye", "goodbye", "that's all", "that's it", "quit", "exit", "stop", "再见", "拜拜", "退下", "退出"
+  };
+
+  for (const auto& kw : kSignoffs) {
+    if (lower_text.find(kw) != std::string::npos) {
+      kLog->info("signoff matched: '{}'", kw);
+      std::lock_guard<std::mutex> lock(mu_);
+      BeginFarewellStateLocked();
+      break;
+    }
+  }
+}
+
+void App::OnUserActivity() {
+  CancelWelcomeTimer();
+  if (gate_ && gate_->step() == wakeup::Step::kActive) {
+    gate_->RefreshTimeout();
+  }
+
+  bool should_interrupt = false;
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    should_interrupt = is_ai_speaking_ || pending_playback_chunks_ > 0;
+    if (should_interrupt) {
+      is_ai_speaking_ = false;
+      ai_speech_stop_time_ = std::chrono::steady_clock::now();
+      ResetFarewellStateLocked();
+    }
+  }
+  if (!should_interrupt) {
+    return;
+  }
+
+  kLog->info("barge-in detected: interrupt current playback");
+  if (gate_) {
+    gate_->SetAiSpeaking(false);
+  }
+  InterruptPlayback();
+}
+
+void App::OnSessionClosed(const std::string& reason) {
+  if (stopping_.load()) {
+    return;
+  }
+  kLog->info("session closed: {}", reason);
+  CancelWelcomeTimer();
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    ResetFarewellStateLocked();
+  }
+  if (gate_) {
+    gate_->Disarm(reason);
+  }
+}
+
+void App::OnChatEnded() {
+  if (stopping_.load()) {
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (!farewell_pending_) {
+      return;
+    }
+    farewell_chat_ended_ = true;
+  }
+  TryFinalizeFarewell();
+}
+
+void App::OnArm(const std::string& reason) {
+  kLog->info("gate armed: {}", reason);
+  InterruptPlayback();
+
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    ResetFarewellStateLocked();
+  }
+
+  if (!client_ || !gate_) {
+    kLog->error("on_arm skipped: client/gate missing");
+    return;
+  }
+  if (!client_->StartSession(std::chrono::seconds(12))) {
+    kLog->error("start session failed");
+    gate_->Disarm("session_start_failed");
+    return;
+  }
+  if (gate_->step() != wakeup::Step::kActive) {
+    kLog->info("on_arm cancelled: gate no longer active");
+    client_->FinishSession(std::chrono::seconds(2));
+    return;
+  }
+  if (!cfg_.wakeup.say_hello.empty()) {
+    if (!client_->SendSayHello()) {
+      kLog->error("send say_hello failed");
+      client_->FinishSession(std::chrono::seconds(2));
+      gate_->Disarm("say_hello_failed");
+      return;
+    }
+    StartWelcomeTimer();
+  }
+}
+
+void App::StartWelcomeTimer() {
+  CancelWelcomeTimer();
+  const auto epoch = ++welcome_epoch_;
+  {
+    std::lock_guard<std::mutex> lock(welcome_mu_);
+    welcome_cancelled_ = false;
+  }
+
+  std::thread timer([this, epoch]() {
+    std::unique_lock<std::mutex> lock(welcome_mu_);
+    const auto timeout = std::chrono::seconds(kWelcomeResponseTimeoutSec);
+    const bool cancelled = welcome_cv_.wait_for(lock, timeout, [this, epoch]() {
+      return welcome_cancelled_ || !running_.load() || welcome_epoch_.load() != epoch;
+    });
+    if (cancelled) {
+      return;
+    }
+    lock.unlock();
+    FinishSessionAndDisarm("welcome_timeout");
+  });
+  std::lock_guard<std::mutex> lock(welcome_thread_mu_);
+  welcome_thread_ = std::move(timer);
+}
+
+void App::CancelWelcomeTimer() {
+  ++welcome_epoch_;
+  {
+    std::lock_guard<std::mutex> lock(welcome_mu_);
+    welcome_cancelled_ = true;
+  }
+  welcome_cv_.notify_all();
+  std::thread timer_to_join;
+  {
+    std::lock_guard<std::mutex> lock(welcome_thread_mu_);
+    if (welcome_thread_.joinable() &&
+        welcome_thread_.get_id() != std::this_thread::get_id()) {
+      timer_to_join = std::move(welcome_thread_);
+    }
+  }
+  if (timer_to_join.joinable()) {
+    timer_to_join.join();
+  }
+}
+
+void App::FinishSessionAndDisarm(const std::string& reason) {
+  kLog->info("finish session and disarm: {}", reason);
+  CancelWelcomeTimer();
+  InterruptPlayback();
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    ResetFarewellStateLocked();
+  }
+  if (client_) {
+    client_->FinishSession(std::chrono::seconds(2));
+  }
+  if (gate_) {
+    gate_->Disarm(reason);
+  }
+}
+
+void App::TryFinalizeFarewell() {
+  bool should_close = false;
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (farewell_pending_ && farewell_chat_ended_ && farewell_tts_started_ &&
+        !is_ai_speaking_ &&
+        pending_playback_chunks_ == 0) {
+      should_close = true;
+      ResetFarewellStateLocked();
+    }
+  }
+
+  if (!should_close) {
+    return;
+  }
+
+  kLog->info("farewell close: playback drained, closing session");
+  CancelWelcomeTimer();
+  if (client_) client_->FinishSession(std::chrono::seconds(4));
+  if (gate_) gate_->Disarm("bye");
+}
+
+void App::ResetFarewellStateLocked() {
+  farewell_pending_ = false;
+  farewell_chat_ended_ = false;
+  farewell_tts_started_ = false;
+}
+
+void App::BeginFarewellStateLocked() {
+  farewell_pending_ = true;
+  farewell_chat_ended_ = false;
+  farewell_tts_started_ = false;
+}
+
+void App::InterruptPlayback() {
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    pending_playback_chunks_ = 0;
+    ai_speech_stop_time_ = std::chrono::steady_clock::now();
+  }
+  if (player_) {
+    player_->Interrupt();
+  }
+  RunCmd("mphelper pause >/dev/null 2>&1");
+  // Stop ongoing XiaoAi TTS speech if active
+  RunCmd("killall miplayer >/dev/null 2>&1");
+  // Pause AirPlay and XiaoAi wake word detection while Google is active
+  RunCmd("killall -STOP shairport-sync mipns-xiaomi mpas >/dev/null 2>&1");
+}
+
+}  // namespace xiaoai_plus::app
