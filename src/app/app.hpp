@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <memory>
 #include <mutex>
@@ -82,6 +83,7 @@ class App {
   bool farewell_chat_ended_{false};
   bool farewell_tts_started_{false};
   size_t pending_playback_chunks_{0};
+  std::chrono::steady_clock::time_point ai_speech_stop_time_{};
 
   // Reused capture-thread buffers to reduce per-frame allocations.
   std::vector<uint8_t> s16_buf_;
