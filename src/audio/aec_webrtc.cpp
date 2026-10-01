@@ -70,7 +70,7 @@ struct AecWebrtc::Impl {
     LogInitError("enable echo_cancellation", apm->echo_cancellation()->Enable(true));
     LogInitError("set suppression level",
                  apm->echo_cancellation()->set_suppression_level(
-                     webrtc::EchoCancellation::kHighSuppression));
+                     webrtc::EchoCancellation::kVeryHighSuppression));
 
     LogInitError("enable noise_suppression", apm->noise_suppression()->Enable(true));
 
