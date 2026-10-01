@@ -68,6 +68,7 @@ struct AecWebrtc::Impl {
         in_cfg(sample_rate_hz, channels, false),
         out_cfg(sample_rate_hz, channels, false) {
     LogInitError("enable echo_cancellation", apm->echo_cancellation()->Enable(true));
+    // Use maximum suppression to prevent AI from hearing itself
     LogInitError("set suppression level",
                  apm->echo_cancellation()->set_suppression_level(
                      webrtc::EchoCancellation::kVeryHighSuppression));
@@ -121,7 +122,7 @@ void AecWebrtc::AnalyzeReverseStream(const uint8_t* pcm, size_t size_bytes) {
   const size_t reverse_available = impl_->reverse_pending.size() - impl_->reverse_read_pos;
   if (reverse_available > max_pending) {
     impl_->reverse_read_pos += (reverse_available - max_pending);
-        kLog->warn("aec: dropped reverse samples (overflow)");
+    kLog->warn("aec: dropped reverse samples (overflow)");
   }
   while (impl_->reverse_pending.size() - impl_->reverse_read_pos >= frame_samples) {
     const int16_t* frame =
@@ -139,7 +140,7 @@ void AecWebrtc::AnalyzeReverseStream(const uint8_t* pcm, size_t size_bytes) {
       ++impl_->reverse_error_count;
       if (impl_->reverse_error_count == 1 || impl_->reverse_error_count % 200 == 0) {
         kLog->warn("aec: ProcessReverseStream failed: rc={} count={}", rc,
-                     impl_->reverse_error_count);
+                   impl_->reverse_error_count);
       }
     }
   }
@@ -165,7 +166,7 @@ std::vector<uint8_t> AecWebrtc::ProcessCaptureStream(const uint8_t* pcm, size_t 
   const size_t capture_available = impl_->capture_pending.size() - impl_->capture_read_pos;
   if (capture_available > max_pending) {
     impl_->capture_read_pos += (capture_available - max_pending);
-        kLog->warn("aec: dropped capture samples (overflow)");
+    kLog->warn("aec: dropped capture samples (overflow)");
   }
   while (impl_->capture_pending.size() - impl_->capture_read_pos >= frame_samples) {
     const int16_t* frame =
@@ -182,7 +183,7 @@ std::vector<uint8_t> AecWebrtc::ProcessCaptureStream(const uint8_t* pcm, size_t 
       ++impl_->delay_error_count;
       if (impl_->delay_error_count == 1 || impl_->delay_error_count % 200 == 0) {
         kLog->warn("aec: set_stream_delay_ms failed: rc={} count={}", delay_rc,
-                     impl_->delay_error_count);
+                   impl_->delay_error_count);
       }
     }
     const int rc = impl_->apm->ProcessStream(capture_src, impl_->in_cfg, impl_->out_cfg, capture_dst);
