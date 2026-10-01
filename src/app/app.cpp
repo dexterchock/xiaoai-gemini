@@ -88,19 +88,19 @@ void ScalePcmS16InPlace(std::vector<uint8_t>* pcm, float gain) {
 
 float ComputeUplinkGainWhileAiSpeaking(const EchoStats& stats) {
   if (!stats.valid_ref) {
-    return 0.30f;
+    return 0.15f;
   }
 
   const bool echo_dominant =
-      (stats.ref_rms > 1200.0 && stats.ratio < 0.55 && stats.corr > 0.06);
+      (stats.ref_rms > 1000.0 && stats.ratio < 0.60 && stats.corr > 0.05);
 
-  const bool has_near_end_speech = (stats.corr < 0.04 || stats.ratio > 0.70);
+  const bool has_near_end_speech = (stats.corr < 0.04 || stats.ratio > 0.75);
 
   if (echo_dominant) {
-    return has_near_end_speech ? 0.34f : 0.006f;
+    return has_near_end_speech ? 0.30f : 0.0f;
   }
 
-  return has_near_end_speech ? 0.55f : 0.18f;
+  return has_near_end_speech ? 0.50f : 0.05f;
 }
 
 std::string TrimSpace(std::string s) {
@@ -253,7 +253,7 @@ bool App::Run() {
   kLog->info("app components started");
 
   std::thread([]() {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
     const int rc =
         std::system("/usr/sbin/tts_play.sh '谷歌已启动' >/dev/null 2>&1");
     if (rc != 0) {
@@ -281,7 +281,7 @@ void App::Stop() {
   running_.store(false);
   run_cv_.notify_all();
 
-  // Ensure XiaoAi and AirPlay are resumed if the Google assistant stops
+  // Ensure XiaoAi and AirPlay are resumed if Google assistant shuts down
   (void)std::system("killall -CONT shairport-sync mipns-xiaomi mpas >/dev/null 2>&1");
 
   {
@@ -449,9 +449,18 @@ void App::OnInputAudio(const std::vector<uint8_t>& chunk) {
   }
   if (client_) {
     bool ai_speaking = false;
+    bool in_echo_cooldown = false;
     {
       std::lock_guard<std::mutex> lock(mu_);
       ai_speaking = is_ai_speaking_ || (pending_playback_chunks_ > 0);
+      if (!ai_speaking) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - ai_speech_stop_time_).count();
+        // 450ms cooldown window to absorb room reverberation and audio pipe drain
+        if (elapsed < 450) {
+          in_echo_cooldown = true;
+        }
+      }
     }
 
     const std::vector<uint8_t>* api_audio = &capture_mono_buf_;
@@ -464,8 +473,15 @@ void App::OnInputAudio(const std::vector<uint8_t>& chunk) {
       }
     }
 
-    if (ai_speaking) {
-      const float gain = ComputeUplinkGainWhileAiSpeaking(echo_stats);
+    if (ai_speaking || in_echo_cooldown) {
+      float gain = 0.0f;
+      if (ai_speaking) {
+        gain = ComputeUplinkGainWhileAiSpeaking(echo_stats);
+      } else {
+        // Complete silence during the post-speech cooldown to eliminate residual echo
+        gain = 0.0f;
+      }
+
       if (gain < 0.999f) {
         if (api_audio == &capture_mono_buf_) {
           owned_audio = capture_mono_buf_;
@@ -510,6 +526,9 @@ void App::OnAudio(const std::vector<uint8_t>& chunk) {
       if (pending_playback_chunks_ > 0) {
         --pending_playback_chunks_;
       }
+      if (pending_playback_chunks_ == 0) {
+        ai_speech_stop_time_ = std::chrono::steady_clock::now();
+      }
     }
     kLog->warn("player queue full, drop tts chunk: bytes={}", chunk.size());
     TryFinalizeFarewell();
@@ -522,6 +541,9 @@ void App::OnPlaybackChunkPlayed() {
     if (pending_playback_chunks_ > 0) {
       --pending_playback_chunks_;
     }
+    if (pending_playback_chunks_ == 0) {
+      ai_speech_stop_time_ = std::chrono::steady_clock::now();
+    }
   }
   TryFinalizeFarewell();
 }
@@ -532,6 +554,9 @@ void App::OnSetAiSpeaking(bool is_speaking) {
     is_ai_speaking_ = is_speaking;
     if (is_speaking && farewell_pending_) {
       farewell_tts_started_ = true;
+    }
+    if (!is_speaking) {
+      ai_speech_stop_time_ = std::chrono::steady_clock::now();
     }
   }
   if (gate_) {
@@ -577,6 +602,7 @@ void App::OnUserActivity() {
     should_interrupt = is_ai_speaking_ || pending_playback_chunks_ > 0;
     if (should_interrupt) {
       is_ai_speaking_ = false;
+      ai_speech_stop_time_ = std::chrono::steady_clock::now();
       ResetFarewellStateLocked();
     }
   }
@@ -752,6 +778,7 @@ void App::InterruptPlayback() {
   {
     std::lock_guard<std::mutex> lock(mu_);
     pending_playback_chunks_ = 0;
+    ai_speech_stop_time_ = std::chrono::steady_clock::now();
   }
   if (player_) {
     player_->Interrupt();
