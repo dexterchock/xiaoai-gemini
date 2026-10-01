@@ -68,10 +68,9 @@ struct AecWebrtc::Impl {
         in_cfg(sample_rate_hz, channels, false),
         out_cfg(sample_rate_hz, channels, false) {
     LogInitError("enable echo_cancellation", apm->echo_cancellation()->Enable(true));
-    // Use maximum suppression to prevent AI from hearing itself
     LogInitError("set suppression level",
                  apm->echo_cancellation()->set_suppression_level(
-                     webrtc::EchoCancellation::kVeryHighSuppression));
+                     webrtc::EchoCancellation::kHighSuppression));
 
     LogInitError("enable noise_suppression", apm->noise_suppression()->Enable(true));
 
