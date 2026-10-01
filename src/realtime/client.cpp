@@ -487,9 +487,9 @@ nlohmann::json Client::BuildSetupMessage() const {
 }
 
 void Client::OnServerMessage(const nlohmann::json& msg) {
-  if (!msg.is_object()) {
-    return;
-  }
+if (kLog->should_log(spdlog::level::debug)) {
+  kLog->debug("server msg: {}", msg.dump());
+}
 
   kLog->info("server msg: {}", msg.dump());
 
