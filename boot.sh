@@ -8,6 +8,7 @@ LOG_PATH="/data/xiaoai-plus/xiaoai_plus.log"
 AIRPLAY_BIN="/data/xiaoai-plus/shairport-sync"
 AIRPLAY_CFG="/data/xiaoai-plus/shairport-sync.conf"
 AIRPLAY_LOG="/data/xiaoai-plus/shairport.log"
+AIRPLAY_ALSA_DEV="notify"
 WAIT_HOST="223.5.5.5"
 WAIT_SECONDS=60
 
@@ -53,11 +54,17 @@ sleep 1
 
 cd "${APP_DIR}"
 
-# 注意：当前 shairport-sync 编译时未启用 libdaemon，不支持 -d / -j 守护化参数，
-# 使用它们会直接退出。这里改用 shell 后台运行，并把日志写入文件以便排查。
+# shairport-sync 编译时未启用 libdaemon，不支持 -d / -j，用 & 放到后台。
+# 静态链接的 ALSA 无法打开设备（dmix unable to open slave），
+# 所以让 shairport-sync 输出 raw PCM（44100Hz / S16_LE / 立体声）到 stdout，
+# 再交给系统自带的 aplay 播放（与语音助手走同一条 notify -> dmix 通道）。
+# shairport-sync 退出后 aplay 会读到 EOF 自动退出。
 if [ -x "${AIRPLAY_BIN}" ] && [ -f "${AIRPLAY_CFG}" ]; then
   echo "启动 AirPlay 接收服务..."
-  "${AIRPLAY_BIN}" -c "${AIRPLAY_CFG}" >"${AIRPLAY_LOG}" 2>&1 &
+  (
+    "${AIRPLAY_BIN}" -c "${AIRPLAY_CFG}" 2>"${AIRPLAY_LOG}" |
+      aplay -q -D "${AIRPLAY_ALSA_DEV}" -t raw -f S16_LE -r 44100 -c 2
+  ) &
   sleep 1
   if ! ps | grep -q '[s]hairport-sync'; then
     echo "警告：AirPlay 启动失败，请查看 ${AIRPLAY_LOG}" >&2
