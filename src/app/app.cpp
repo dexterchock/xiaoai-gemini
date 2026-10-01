@@ -24,6 +24,11 @@ constexpr int kWelcomeResponseTimeoutSec = 8;
 constexpr float kKwsThreshold = 0.20f;
 constexpr int kMinTriggerIntervalMs = 800;
 
+inline void RunCmd(const char* cmd) {
+  int rc = std::system(cmd);
+  (void)rc;
+}
+
 struct EchoStats {
   double mic_rms{0.0};
   double ref_rms{0.0};
@@ -174,7 +179,7 @@ App::App(config::Config cfg) : cfg_(std::move(cfg)) {
   hooks.after_disarm = [this](const std::string&) {
     CancelWelcomeTimer();
     // Resume AirPlay and XiaoAi wake word detection when voice conversation ends
-    (void)std::system("killall -CONT shairport-sync mipns-xiaomi mpas >/dev/null 2>&1");
+    RunCmd("killall -CONT shairport-sync mipns-xiaomi mpas >/dev/null 2>&1");
   };
   hooks.on_arm = [this](const std::string& reason) {
     // Run OnArm asynchronously so audio capture is not blocked during TLS handshake
@@ -254,11 +259,7 @@ bool App::Run() {
 
   std::thread([]() {
     std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-    const int rc =
-        std::system("/usr/sbin/tts_play.sh '谷歌已启动' >/dev/null 2>&1");
-    if (rc != 0) {
-      kLog->warn("startup tts command failed: rc={}", rc);
-    }
+    RunCmd("/usr/sbin/tts_play.sh '谷歌已启动' >/dev/null 2>&1");
   }).detach();
 
   {
@@ -282,7 +283,7 @@ void App::Stop() {
   run_cv_.notify_all();
 
   // Ensure XiaoAi and AirPlay are resumed if Google assistant shuts down
-  (void)std::system("killall -CONT shairport-sync mipns-xiaomi mpas >/dev/null 2>&1");
+  RunCmd("killall -CONT shairport-sync mipns-xiaomi mpas >/dev/null 2>&1");
 
   {
     std::lock_guard<std::mutex> lock(state_mu_);
@@ -478,7 +479,7 @@ void App::OnInputAudio(const std::vector<uint8_t>& chunk) {
       if (ai_speaking) {
         gain = ComputeUplinkGainWhileAiSpeaking(echo_stats);
       } else {
-        // Complete silence during the post-speech cooldown to eliminate residual echo
+        // Complete silence during post-speech cooldown to eliminate residual echo
         gain = 0.0f;
       }
 
@@ -763,34 +764,4 @@ void App::TryFinalizeFarewell() {
 }
 
 void App::ResetFarewellStateLocked() {
-  farewell_pending_ = false;
-  farewell_chat_ended_ = false;
-  farewell_tts_started_ = false;
-}
-
-void App::BeginFarewellStateLocked() {
-  farewell_pending_ = true;
-  farewell_chat_ended_ = false;
-  farewell_tts_started_ = false;
-}
-
-void App::InterruptPlayback() {
-  {
-    std::lock_guard<std::mutex> lock(mu_);
-    pending_playback_chunks_ = 0;
-    ai_speech_stop_time_ = std::chrono::steady_clock::now();
-  }
-  if (player_) {
-    player_->Interrupt();
-  }
-  const int rc = std::system("mphelper pause >/dev/null 2>&1");
-  if (rc != 0) {
-    kLog->warn("mphelper pause failed: rc={}", rc);
-  }
-  // Stop ongoing XiaoAi TTS speech if active
-  (void)std::system("killall miplayer >/dev/null 2>&1");
-  // Pause AirPlay and XiaoAi wake word detection while Google is active
-  (void)std::system("killall -STOP shairport-sync mipns-xiaomi mpas >/dev/null 2>&1");
-}
-
-}  // namespace xiaoai_plus::app
+  farewell_pen
