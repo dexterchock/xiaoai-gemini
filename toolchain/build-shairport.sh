@@ -64,6 +64,7 @@ export PKG_CONFIG_SYSROOT_DIR=""
 ./configure \
   --host=arm-linux-gnueabihf \
   --with-alsa \
+  --with-stdout \
   --with-tinysvcmdns \
   --with-ssl=openssl \
   --with-metadata \
