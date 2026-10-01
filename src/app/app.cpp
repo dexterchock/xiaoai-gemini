@@ -179,7 +179,7 @@ App::App(config::Config cfg) : cfg_(std::move(cfg)) {
   hooks.after_disarm = [this](const std::string&) {
     CancelWelcomeTimer();
     // Resume AirPlay and XiaoAi wake word detection when voice conversation ends
-    RunCmd("killall -CONT shairport-sync mipns-xiaomi mpas >/dev/null 2>&1");
+    RunCmd("killall -CONT shairport-sync mipns-xiaomi >/dev/null 2>&1");
   };
   hooks.on_arm = [this](const std::string& reason) {
     // Run OnArm asynchronously so audio capture is not blocked during TLS handshake
@@ -283,7 +283,7 @@ void App::Stop() {
   run_cv_.notify_all();
 
   // Ensure XiaoAi and AirPlay are resumed if Google assistant shuts down
-  RunCmd("killall -CONT shairport-sync mipns-xiaomi mpas >/dev/null 2>&1");
+  RunCmd("killall -CONT shairport-sync mipns-xiaomi >/dev/null 2>&1");
 
   {
     std::lock_guard<std::mutex> lock(state_mu_);
@@ -788,7 +788,7 @@ void App::InterruptPlayback() {
   // Stop ongoing XiaoAi TTS speech if active
   RunCmd("killall miplayer >/dev/null 2>&1");
   // Pause AirPlay and XiaoAi wake word detection while Google is active
-  RunCmd("killall -STOP shairport-sync mipns-xiaomi mpas >/dev/null 2>&1");
+  RunCmd("killall -STOP shairport-sync mipns-xiaomi >/dev/null 2>&1");
 }
 
 }  // namespace xiaoai_plus::app
