@@ -173,8 +173,8 @@ App::App(config::Config cfg) : cfg_(std::move(cfg)) {
   wakeup::Hooks hooks;
   hooks.after_disarm = [this](const std::string&) {
     CancelWelcomeTimer();
-    // Resume AirPlay audio when voice conversation ends
-    (void)std::system("killall -CONT shairport-sync >/dev/null 2>&1");
+    // Resume AirPlay and XiaoAi wake word detection when voice conversation ends
+    (void)std::system("killall -CONT shairport-sync mipns-xiaomi mpas >/dev/null 2>&1");
   };
   hooks.on_arm = [this](const std::string& reason) {
     // Run OnArm asynchronously so audio capture is not blocked during TLS handshake
@@ -253,6 +253,7 @@ bool App::Run() {
   kLog->info("app components started");
 
   std::thread([]() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
     const int rc =
         std::system("/usr/sbin/tts_play.sh '谷歌已启动' >/dev/null 2>&1");
     if (rc != 0) {
@@ -279,6 +280,9 @@ void App::Stop() {
   kLog->info("app stopping");
   running_.store(false);
   run_cv_.notify_all();
+
+  // Ensure XiaoAi and AirPlay are resumed if the Google assistant stops
+  (void)std::system("killall -CONT shairport-sync mipns-xiaomi mpas >/dev/null 2>&1");
 
   {
     std::lock_guard<std::mutex> lock(state_mu_);
@@ -752,12 +756,14 @@ void App::InterruptPlayback() {
   if (player_) {
     player_->Interrupt();
   }
-  const int rc = std::system("mphelper pause");
+  const int rc = std::system("mphelper pause >/dev/null 2>&1");
   if (rc != 0) {
     kLog->warn("mphelper pause failed: rc={}", rc);
   }
-  // Pause AirPlay so music stops playing over the voice assistant
-  (void)std::system("killall -STOP shairport-sync >/dev/null 2>&1");
+  // Stop ongoing XiaoAi TTS speech if active
+  (void)std::system("killall miplayer >/dev/null 2>&1");
+  // Pause AirPlay and XiaoAi wake word detection while Google is active
+  (void)std::system("killall -STOP shairport-sync mipns-xiaomi mpas >/dev/null 2>&1");
 }
 
 }  // namespace xiaoai_plus::app
