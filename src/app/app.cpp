@@ -29,6 +29,12 @@ inline void RunCmd(const char* cmd) {
   (void)rc;
 }
 
+// Resume AirPlay and XiaoAi wake word detection (they are frozen with SIGSTOP
+// while the Google assistant is active). Safe to call at any time.
+inline void ResumeOtherServices() {
+  RunCmd("killall -CONT shairport-sync mipns-xiaomi >/dev/null 2>&1");
+}
+
 struct EchoStats {
   double mic_rms{0.0};
   double ref_rms{0.0};
@@ -179,7 +185,7 @@ App::App(config::Config cfg) : cfg_(std::move(cfg)) {
   hooks.after_disarm = [this](const std::string&) {
     CancelWelcomeTimer();
     // Resume AirPlay and XiaoAi wake word detection when voice conversation ends
-    RunCmd("killall -CONT shairport-sync mipns-xiaomi >/dev/null 2>&1");
+    ResumeOtherServices();
   };
   hooks.on_arm = [this](const std::string& reason) {
     // Run OnArm asynchronously so audio capture is not blocked during TLS handshake
@@ -283,7 +289,7 @@ void App::Stop() {
   run_cv_.notify_all();
 
   // Ensure XiaoAi and AirPlay are resumed if Google assistant shuts down
-  RunCmd("killall -CONT shairport-sync mipns-xiaomi >/dev/null 2>&1");
+  ResumeOtherServices();
 
   {
     std::lock_guard<std::mutex> lock(state_mu_);
@@ -577,17 +583,43 @@ void App::OnAsrFinal(const std::string& text) {
   std::transform(lower_text.begin(), lower_text.end(), lower_text.begin(),
                  [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
-  static const std::vector<std::string> kSignoffs = {
-      "bye", "goodbye", "that's all", "that's it", "quit", "exit", "stop", "再见", "拜拜", "退下", "退出"
-  };
+  // Normalize curly apostrophes so "that’s all" matches "that's all".
+  for (size_t pos = 0; (pos = lower_text.find("\xE2\x80\x99", pos)) != std::string::npos;) {
+    lower_text.replace(pos, 3, "'");
+    ++pos;
+  }
 
+  // Strong sign-offs: end the chat wherever they appear in the sentence.
+  // "bye" also covers "goodbye", "good bye" and "bye-bye".
+  static const std::vector<std::string> kSignoffs = {
+      "bye", "that's it", "thats it", "that's all", "thats all", "you can go now"
+  };
+  // Soft sign-offs: only count when the utterance is short, so
+  // "thanks, what's the weather?" does not end the chat.
+  static const std::vector<std::string> kSoftSignoffs = {
+      "alright", "all right", "thanks", "thank you"
+  };
+  constexpr size_t kSoftSignoffMaxBytes = 24;
+
+  const std::string* matched = nullptr;
   for (const auto& kw : kSignoffs) {
     if (lower_text.find(kw) != std::string::npos) {
-      kLog->info("signoff matched: '{}'", kw);
-      std::lock_guard<std::mutex> lock(mu_);
-      BeginFarewellStateLocked();
+      matched = &kw;
       break;
     }
+  }
+  if (!matched && lower_text.size() <= kSoftSignoffMaxBytes) {
+    for (const auto& kw : kSoftSignoffs) {
+      if (lower_text.find(kw) != std::string::npos) {
+        matched = &kw;
+        break;
+      }
+    }
+  }
+  if (matched) {
+    kLog->info("signoff matched: '{}'", *matched);
+    std::lock_guard<std::mutex> lock(mu_);
+    BeginFarewellStateLocked();
   }
 }
 
@@ -631,6 +663,9 @@ void App::OnSessionClosed(const std::string& reason) {
   if (gate_) {
     gate_->Disarm(reason);
   }
+  // Disarm() does nothing when the gate is already idle, so make sure the
+  // frozen services are always resumed.
+  ResumeOtherServices();
 }
 
 void App::OnChatEnded() {
@@ -658,16 +693,19 @@ void App::OnArm(const std::string& reason) {
 
   if (!client_ || !gate_) {
     kLog->error("on_arm skipped: client/gate missing");
+    ResumeOtherServices();
     return;
   }
   if (!client_->StartSession(std::chrono::seconds(12))) {
     kLog->error("start session failed");
     gate_->Disarm("session_start_failed");
+    ResumeOtherServices();
     return;
   }
   if (gate_->step() != wakeup::Step::kActive) {
     kLog->info("on_arm cancelled: gate no longer active");
     client_->FinishSession(std::chrono::seconds(2));
+    ResumeOtherServices();
     return;
   }
   if (!cfg_.wakeup.say_hello.empty()) {
@@ -675,6 +713,7 @@ void App::OnArm(const std::string& reason) {
       kLog->error("send say_hello failed");
       client_->FinishSession(std::chrono::seconds(2));
       gate_->Disarm("say_hello_failed");
+      ResumeOtherServices();
       return;
     }
     StartWelcomeTimer();
@@ -739,6 +778,9 @@ void App::FinishSessionAndDisarm(const std::string& reason) {
   if (gate_) {
     gate_->Disarm(reason);
   }
+  // InterruptPlayback() above freezes AirPlay/XiaoAi; Disarm() skips its resume
+  // hook when the gate is already idle, so always resume here.
+  ResumeOtherServices();
 }
 
 void App::TryFinalizeFarewell() {
