@@ -29,7 +29,7 @@ struct ZipformerKwsEngine::Impl {
           c.model_config.transducer.encoder = cfg.encoder_path;
           c.model_config.transducer.decoder = cfg.decoder_path;
           c.model_config.transducer.joiner = cfg.joiner_path;
-          c.model_config.num_threads = 2;
+          c.model_config.num_threads = 1;
           c.model_config.provider = "cpu";
           c.keywords_threshold = kKwsThreshold;
           c.keywords_score = 3.0f;
