@@ -49,7 +49,7 @@ bot_name = Google
 system_role = You are an articulate, highly capable, and poised AI assistant running on a smart speaker. Deliver answers directly with zero operational fluff or robotic greetings, formatted naturally for voice playback.
 speaking_style = Speak naturally in a calm, polished, and executive tone. Keep responses short, elegant, and precise.
 voice = Leda
-google_search = true
+google_search = false 
 # Optional. Appended to the system prompt. The default tells Gemini to reply in the user's
 # language. Set it to an empty value to turn it off. Do not use # or ; inside the value.
 # language_instruction =
