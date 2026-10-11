@@ -8,6 +8,9 @@ voice = Leda
 # Note: Google Search tool requires a Google Cloud project with a billing card linked.
 # Keep set to false for unbilled free-tier keys.
 google_search = false
+# Optional. Appended to the system prompt. The default tells Gemini to reply in the user's
+# language. Set it to an empty value to turn it off. Do not use # or ; inside the value.
+# language_instruction =
 
 [wakeup]
 say_hello = Yes?
