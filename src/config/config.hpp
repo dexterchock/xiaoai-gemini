@@ -13,6 +13,12 @@ struct RealtimePreset {
   std::string system_role{"You are Google, a helpful voice assistant running on a smart speaker."};
   std::string speaking_style{"Speak naturally, politely, and concisely."};
   std::string voice{"Leda"};
+  // Appended to the system prompt. Keeps the model from locking onto English just because the
+  // wake phrase / hello text is English. Set `language_instruction =` (empty) to disable.
+  std::string language_instruction{
+      "Language: always reply in the language the user is speaking, and switch the moment they "
+      "switch. Never assume English. The wake phrase and the greeting are in English, which says "
+      "nothing about the user's language. You can speak any language the user speaks to you in."};
   bool google_search{false};
 };
 

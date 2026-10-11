@@ -166,6 +166,7 @@ Config load(const std::string& path) {
       SetIfPresent(kv, "system_role", &cfg.realtime.preset.system_role);
       SetIfPresent(kv, "speaking_style", &cfg.realtime.preset.speaking_style);
       SetIfPresent(kv, "voice", &cfg.realtime.preset.voice);
+      SetIfPresent(kv, "language_instruction", &cfg.realtime.preset.language_instruction);
       SetIfPresent(kv, "ws_url", &cfg.realtime.preset.ws_url);
       SetIfPresent(kv, "google_search", &cfg.realtime.preset.google_search);
     }
