@@ -453,6 +453,12 @@ nlohmann::json Client::BuildSetupMessage() const {
   if (!preset.speaking_style.empty()) {
     system_text += preset.speaking_style;
   }
+  if (!preset.language_instruction.empty()) {
+    if (!system_text.empty() && system_text.back() != '\n') {
+      system_text += "\n";
+    }
+    system_text += preset.language_instruction;
+  }
 
   nlohmann::json generation_config = {
       {"responseModalities", nlohmann::json::array({"AUDIO"})},
@@ -487,11 +493,11 @@ nlohmann::json Client::BuildSetupMessage() const {
 }
 
 void Client::OnServerMessage(const nlohmann::json& msg) {
-if (kLog->should_log(spdlog::level::debug)) {
-  kLog->debug("server msg: {}", msg.dump());
-}
-
-  kLog->info("server msg: {}", msg.dump());
+  // Debug only: every audio chunk arrives here as base64, so logging at info level
+  // fills the flash within days.
+  if (kLog->should_log(spdlog::level::debug)) {
+    kLog->debug("server msg: {}", msg.dump());
+  }
 
   if (msg.contains("error")) {
     kLog->error("gemini server error: {}", msg["error"].dump());
