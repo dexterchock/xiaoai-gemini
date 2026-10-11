@@ -265,7 +265,7 @@ bool App::Run() {
 
   std::thread([]() {
     std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-    RunCmd("/usr/sbin/tts_play.sh '谷歌已启动' >/dev/null 2>&1");
+    RunCmd("/usr/sbin/tts_play.sh 'Gemini已启动' >/dev/null 2>&1");
   }).detach();
 
   {
@@ -592,13 +592,19 @@ void App::OnAsrFinal(const std::string& text) {
   // Strong sign-offs: end the chat wherever they appear in the sentence.
   // "bye" also covers "goodbye", "good bye" and "bye-bye".
   static const std::vector<std::string> kSignoffs = {
-      "bye", "that's it", "thats it", "that's all", "thats all", "you can go now"
+      "bye", "that's it", "thats it", "that's all", "thats all", "you can go now",
+      // Chinese
+      "再见", "再見", "拜拜", "就这样吧", "就這樣吧", "那就这样", "你可以走了", "退下"
   };
   // Soft sign-offs: only count when the utterance is short, so
   // "thanks, what's the weather?" does not end the chat.
   static const std::vector<std::string> kSoftSignoffs = {
-      "alright", "all right", "thanks", "thank you"
+      "alright", "all right", "thanks", "thank you",
+      // Chinese
+      "谢谢", "謝謝", "多谢", "多謝", "好了"
   };
+  // Bytes, not characters: a Chinese character is 3 bytes in UTF-8, so this is
+  // roughly 24 English characters or 8 Chinese ones.
   constexpr size_t kSoftSignoffMaxBytes = 24;
 
   const std::string* matched = nullptr;
